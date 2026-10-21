@@ -5,6 +5,7 @@ import SwiftUI
 /// File, View and Go menu commands for the frontmost browser window.
 struct FileCommands: Commands {
     @FocusedObject private var model: BrowserModel?
+    @ObservedObject var settings: ThemeSettings
 
     private var hasSelection: Bool { !(model?.selection.isEmpty ?? true) }
     private var undoManager: UndoManager? { NSApp.keyWindow?.undoManager }
@@ -36,6 +37,7 @@ struct FileCommands: Commands {
                 guard isFileListActive else { return }
                 model?.renameSelection()
             }
+            .keyboardShortcut("r", modifiers: .command)
             .disabled(model?.selection.count != 1)
 
             Divider()
@@ -64,6 +66,15 @@ struct FileCommands: Commands {
         }
 
         CommandGroup(before: .toolbar) {
+            // Switch color themes from the menu bar at any time, like in VS Code.
+            Picker("Theme", selection: $settings.colorTheme) {
+                ForEach(ColorTheme.allCases) { theme in
+                    Text(theme.title).tag(theme)
+                }
+            }
+
+            Divider()
+
             Button("as List") { model?.viewMode = .list }
                 .keyboardShortcut("1", modifiers: .command)
             Button("as Columns") { model?.viewMode = .columns }

@@ -41,6 +41,9 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     private var scheduledRename: URL?
     private var rowSize: RowSize = .regular
     private var accentColor: NSColor = .controlAccentColor
+    private var palette: ThemePalette?
+    private var alternatingRows = false
+    private var hasAppliedSettings = false
 
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
@@ -77,6 +80,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             tableView.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
             for column in FileColumn.allCases {
                 let tableColumn = NSTableColumn(identifier: column.identifier)
+                tableColumn.headerCell = ThemedHeaderCell(textCell: column.title)
                 tableColumn.title = column.title
                 tableColumn.width = column.width
                 tableColumn.minWidth = 60
@@ -145,23 +149,52 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     func showSort(_ sort: FileSort) {
         guard style == .list else { return }
         let descriptor = NSSortDescriptor(key: sort.key.rawValue, ascending: sort.ascending)
+        updateHeaderSortIndicators(sort)
         guard tableView.sortDescriptors.first != descriptor else { return }
         isUpdating = true
         tableView.sortDescriptors = [descriptor]
         isUpdating = false
     }
 
+    private func updateHeaderSortIndicators(_ sort: FileSort) {
+        for tableColumn in tableView.tableColumns {
+            guard let cell = tableColumn.headerCell as? ThemedHeaderCell else { continue }
+            let ascending: Bool? = tableColumn.identifier.rawValue == sort.key.rawValue ? sort.ascending : nil
+            if cell.sortAscending != ascending {
+                cell.sortAscending = ascending
+                tableView.headerView?.needsDisplay = true
+            }
+        }
+    }
+
     /// Applies the look from Settings; `rowSize` overrides the row size (e.g. thumbnails for Screenshots).
     func apply(_ settings: ThemeSettings, rowSize override: RowSize? = nil) {
-        let accent = settings.theme.nsColor
+        let accent = settings.accentNSColor
         let newRowSize = override ?? settings.rowSize
-        let changed = newRowSize != rowSize || accent != accentColor
-            || tableView.usesAlternatingRowBackgroundColors != settings.alternatingRows
+        let newPalette = settings.palette
+        let changed = !hasAppliedSettings || newRowSize != rowSize || accent != accentColor
+            || newPalette != palette || alternatingRows != settings.alternatingRows
         guard changed else { return }
+        hasAppliedSettings = true
         rowSize = newRowSize
         accentColor = accent
+        palette = newPalette
+        alternatingRows = settings.alternatingRows
         tableView.rowHeight = rowSize.rowHeight
-        tableView.usesAlternatingRowBackgroundColors = settings.alternatingRows
+
+        // Color themes paint their own background and alternate rows; Native uses the system's.
+        tableView.usesAlternatingRowBackgroundColors = palette == nil && alternatingRows
+        tableView.backgroundColor = palette?.background ?? .clear
+        scrollView.drawsBackground = palette != nil
+        scrollView.backgroundColor = palette?.background ?? .clear
+        for tableColumn in tableView.tableColumns {
+            (tableColumn.headerCell as? ThemedHeaderCell)?.palette = palette
+        }
+        tableView.headerView?.needsDisplay = true
+        tableView.enumerateAvailableRowViews { rowView, row in
+            self.configure(rowView, row: row)
+        }
+
         isUpdating = true
         tableView.reloadData()
         tableView.selectRowIndexes(tableView.selectedRowIndexes, byExtendingSelection: false)
@@ -189,8 +222,14 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let rowView = ThemedRowView()
-        rowView.accentColor = accentColor
+        configure(rowView, row: row)
         return rowView
+    }
+
+    private func configure(_ rowView: NSTableRowView, row: Int) {
+        guard let rowView = rowView as? ThemedRowView else { return }
+        rowView.accentColor = accentColor
+        rowView.alternateColor = alternatingRows && row % 2 == 1 ? palette?.alternateRow : nil
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -202,7 +241,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         let item = items[row]
         let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? FileCellView
             ?? FileCellView(column: column, showsChevron: style == .column)
-        cell.apply(rowSize)
+        cell.apply(rowSize, palette: palette)
 
         switch column {
         case .name:
@@ -287,6 +326,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     func moveLeft() -> Bool { onMoveLeft?(self) ?? false }
     func moveRight() -> Bool { onMoveRight?(self) ?? false }
     func didBecomeFirstResponder() { onFocus?(self) }
+    func cancelCut() { model.clipboard.cancelCut() }
 
     // MARK: - Rename
 
@@ -470,20 +510,23 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         menu.addItem(item("Quick Look", #selector(menuQuickLook)))
         menu.addItem(.separator())
-        menu.addItem(item("Copy", #selector(menuCopy)))
-        menu.addItem(item("Cut", #selector(menuCut)))
-        let paste = item("Paste", #selector(menuPaste))
+        menu.addItem(item("Copy", #selector(menuCopy), key: "c"))
+        menu.addItem(item("Cut", #selector(menuCut), key: "x"))
+        let paste = item("Paste", #selector(menuPaste), key: "v")
         paste.isEnabled = canPaste
         menu.addItem(paste)
-        menu.addItem(item("Duplicate", #selector(menuDuplicate)))
+        menu.addItem(item("Duplicate", #selector(menuDuplicate), key: "d"))
+        if selected.count == 1, ThumbnailCache.isImage(selected[0].url) {
+            menu.addItem(item("Copy Image", #selector(menuCopyImage)))
+        }
         menu.addItem(.separator())
-        let rename = item("Rename", #selector(menuRename))
+        let rename = item("Rename", #selector(menuRename), key: "r")
         rename.isEnabled = selected.count == 1
         menu.addItem(rename)
-        menu.addItem(item("Move to Trash", #selector(menuTrash)))
-        menu.addItem(item("Delete Immediately…", #selector(menuDelete)))
+        menu.addItem(item("Move to Trash", #selector(menuTrash), key: "\u{8}"))
+        menu.addItem(item("Delete Immediately…", #selector(menuDelete), key: "\u{8}", modifiers: [.command, .option]))
         menu.addItem(.separator())
-        if model.location.kind == .recents, selected.count == 1 {
+        if model.location.kind != .folder, selected.count == 1 {
             menu.addItem(item("Show in Enclosing Folder", #selector(menuEnclosingFolder)))
         }
         menu.addItem(item("Copy Path", #selector(menuCopyPath)))
@@ -525,8 +568,12 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         return menu
     }
 
-    private func item(_ title: String, _ action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+    /// A context menu item. `key` only shows the shortcut (the File/Edit menus handle the keys).
+    private func item(
+        _ title: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = .command
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.keyEquivalentModifierMask = modifiers
         item.target = self
         return item
     }
@@ -546,6 +593,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     @objc private func menuTrash() { trashSelection() }
     @objc private func menuDelete() { model.deleteSelectionImmediately() }
     @objc private func menuCopyPath() { model.copyPathsOfSelection() }
+    @objc private func menuCopyImage() { model.copyImageOfSelection() }
     @objc private func menuReveal() { model.revealSelectionInFinder() }
     @objc private func menuEnclosingFolder() {
         guard let item = selectedItems.first else { return }
@@ -609,6 +657,8 @@ protocol FileTableActions: AnyObject {
     func moveLeft() -> Bool
     func moveRight() -> Bool
     func didBecomeFirstResponder()
+    /// Esc: forget a pending cut.
+    func cancelCut()
 }
 
 /// Hooks the standard Edit menu (⌘C / ⌘X / ⌘V), Quick Look and Finder-style keys into a file list.
@@ -649,6 +699,8 @@ final class FileTable: NSTableView {
             actions?.openSelection()
         } else if event.keyCode == 120 && modifiers.isEmpty { // F2
             actions?.renameSelection()
+        } else if event.keyCode == 53 && modifiers.isEmpty { // Esc
+            actions?.cancelCut()
         } else if event.keyCode == 49 && modifiers.isEmpty { // Space
             toggleQuickLook()
         } else if event.keyCode == 123 && modifiers.isEmpty, actions?.moveLeft() == true { // ←
@@ -722,6 +774,8 @@ final class FileCellView: NSTableCellView {
     private var iconHeight: NSLayoutConstraint?
     private let chevron = NSImageView()
     private var appliedSize: RowSize?
+    private var palette: ThemePalette?
+    private let isNameColumn: Bool
     /// The file this cell currently shows, so late thumbnails don't land on a reused cell.
     var representedPath: String?
 
@@ -730,6 +784,7 @@ final class FileCellView: NSTableCellView {
     }
 
     init(column: FileColumn, showsChevron allowsChevron: Bool) {
+        isNameColumn = column == .name
         super.init(frame: .zero)
         identifier = column.identifier
 
@@ -737,11 +792,9 @@ final class FileCellView: NSTableCellView {
         label.translatesAutoresizingMaskIntoConstraints = false
         label.lineBreakMode = column == .name ? .byTruncatingMiddle : .byTruncatingTail
         label.alignment = column == .size ? .right : .left
-        if column != .name {
-            label.textColor = .secondaryLabelColor
-        }
         addSubview(label)
         textField = label
+        updateColors()
 
         var trailingAnchorForLabel = trailingAnchor
         if allowsChevron {
@@ -781,12 +834,35 @@ final class FileCellView: NSTableCellView {
         ])
     }
 
-    func apply(_ size: RowSize) {
+    func apply(_ size: RowSize, palette newPalette: ThemePalette?) {
+        if newPalette != palette {
+            palette = newPalette
+            updateColors()
+        }
         guard size != appliedSize else { return }
         appliedSize = size
         iconWidth?.constant = size.iconSize
         iconHeight?.constant = size.iconSize
-        textField?.font = .systemFont(ofSize: size.fontSize)
+        // Dates and sizes use tabular digits so the columns line up.
+        textField?.font = isNameColumn
+            ? .systemFont(ofSize: size.fontSize)
+            : .monospacedDigitSystemFont(ofSize: size.fontSize - 1, weight: .regular)
+    }
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { updateColors() }
+    }
+
+    /// Theme text colors, switching to the theme's selection text color on a selected row.
+    private func updateColors() {
+        let selected = backgroundStyle == .emphasized
+        if let palette {
+            textField?.textColor = selected ? palette.selectionText : (isNameColumn ? palette.text : palette.secondaryText)
+            chevron.contentTintColor = selected ? palette.selectionText : palette.secondaryText
+        } else {
+            textField?.textColor = isNameColumn ? .labelColor : .secondaryLabelColor
+            chevron.contentTintColor = .tertiaryLabelColor
+        }
     }
 
     @available(*, unavailable)

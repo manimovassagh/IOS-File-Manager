@@ -14,6 +14,10 @@ final class ThumbnailCache {
         cache.countLimit = 2_000
     }
 
+    static func isImage(_ url: URL) -> Bool {
+        UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? false
+    }
+
     /// Whether `url` is a kind of file that has a meaningful thumbnail.
     static func supportsThumbnail(_ url: URL) -> Bool {
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }

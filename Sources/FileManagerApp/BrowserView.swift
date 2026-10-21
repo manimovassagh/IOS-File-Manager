@@ -16,11 +16,20 @@ struct BrowserView: View {
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(location: model.location) { model.navigate(to: $0) }
+            SidebarView(location: model.location, palette: settings.palette, accent: settings.accentColor) {
+                model.navigate(to: $0)
+            }
         } detail: {
             VStack(spacing: 0) {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let notice = clipboard.notice {
+                    NoticeBar(message: notice) { clipboard.notice = nil }
+                        .task(id: notice) {
+                            try? await Task.sleep(for: .seconds(6))
+                            if clipboard.notice == notice { clipboard.notice = nil }
+                        }
+                }
                 if let contents = clipboard.contents {
                     ClipboardBar(
                         contents: contents,
@@ -31,26 +40,34 @@ struct BrowserView: View {
                 }
                 Divider()
                 PathBar(components: model.pathComponents) { model.navigate(to: $0) }
+                    .themeBackground(settings.palette?.bar)
                 Divider()
                 StatusBar(
                     itemCount: model.items.count,
                     selectedCount: model.selection.count,
+                    selectedSize: model.selectedSize,
                     availableCapacity: model.availableCapacity,
                     activity: model.activity,
+                    queuedCount: model.queuedCount,
                     progress: model.progress,
                     onCancel: { model.cancelOperation() }
                 )
+                .themeBackground(settings.palette?.bar)
             }
+            .themeBackground(settings.palette?.background)
             .inspector(isPresented: inspectorBinding) {
                 inspector
-                    .inspectorColumnWidth(min: 240, ideal: 290, max: 420)
+                    .themeBackground(settings.palette?.background)
+                    .inspectorColumnWidth(min: 260, ideal: 340, max: 520)
             }
         }
+        .themeForeground(settings.palette?.text)
+        .themeToolbar(settings.palette?.bar)
         .navigationTitle(model.title)
         .searchable(text: $model.filterText, placement: .toolbar, prompt: "Filter")
         .focusedSceneObject(model)
         .toolbar { toolbar }
-        .tint(settings.theme.color)
+        .tint(settings.accentColor)
         .alert("Something went wrong", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -192,5 +209,18 @@ struct BrowserView: View {
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
         )
+    }
+}
+
+private extension View {
+    /// Colors the window toolbar for color themes.
+    @ViewBuilder
+    func themeToolbar(_ color: NSColor?) -> some View {
+        if let color {
+            toolbarBackground(Color(nsColor: color), for: .windowToolbar)
+                .toolbarBackground(.visible, for: .windowToolbar)
+        } else {
+            self
+        }
     }
 }

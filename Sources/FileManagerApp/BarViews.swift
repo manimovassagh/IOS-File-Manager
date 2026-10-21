@@ -91,18 +91,52 @@ struct ClipboardBar: View {
     }
 }
 
+/// A short message that disappears by itself (e.g. "your cut was cancelled").
+struct NoticeBar: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .lineLimit(2)
+            Spacer()
+            Button(action: onDismiss) {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.borderless)
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+}
+
 struct StatusBar: View {
     let itemCount: Int
     let selectedCount: Int
+    /// Total size of the selected files, if any are files.
+    let selectedSize: Int64?
     let availableCapacity: Int64?
     let activity: String?
+    /// Operations waiting for the current one to finish.
+    let queuedCount: Int
     let progress: OperationProgress?
     let onCancel: () -> Void
 
     private var text: String {
         var parts = ["\(itemCount) \(itemCount == 1 ? "item" : "items")"]
         if selectedCount > 0 {
-            parts.append("\(selectedCount) selected")
+            if let selectedSize, selectedSize > 0 {
+                parts.append("\(selectedCount) selected (\(ByteCountFormatter.string(fromByteCount: selectedSize, countStyle: .file)))")
+            } else {
+                parts.append("\(selectedCount) selected")
+            }
         }
         if let availableCapacity {
             parts.append("\(ByteCountFormatter.string(fromByteCount: availableCapacity, countStyle: .file)) available")
@@ -127,6 +161,9 @@ struct StatusBar: View {
                     ProgressView().controlSize(.small)
                     Text("\(activity)…")
                 }
+                if queuedCount > 0 {
+                    Text("· \(queuedCount) more queued")
+                }
                 if progress != nil {
                     Button("Cancel", action: onCancel)
                         .buttonStyle(.link)
@@ -137,7 +174,7 @@ struct StatusBar: View {
             Text(text)
             Spacer()
         }
-        .font(.caption)
+        .font(.caption.monospacedDigit())
         .foregroundStyle(.secondary)
         .padding(.horizontal, 10)
         .frame(height: 22)

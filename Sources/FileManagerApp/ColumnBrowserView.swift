@@ -111,6 +111,12 @@ final class ColumnsHostView: NSView {
         scrollView.reflectScrolledClipView(clip)
     }
 
+    /// Background behind the columns and preview for color themes (`nil`: none).
+    func applyBackground(_ color: NSColor?) {
+        scrollView.drawsBackground = color != nil
+        scrollView.backgroundColor = color ?? .clear
+    }
+
     func scrollToEnd() {
         guard let last = panes.last?.view else { return }
         documentView.scrollToVisible(last.frame)
@@ -128,6 +134,16 @@ final class FlippedView: NSView {
 final class ColumnContainerView: NSView {
     let content: NSView
     private let separator = NSBox()
+
+    /// Separator color for color themes; `nil` uses the system separator.
+    var separatorColor: NSColor? {
+        didSet {
+            guard separatorColor != oldValue else { return }
+            separator.boxType = separatorColor == nil ? .separator : .custom
+            separator.borderWidth = 0
+            separator.fillColor = separatorColor ?? .clear
+        }
+    }
 
     init(content: NSView) {
         self.content = content
@@ -230,6 +246,7 @@ final class ColumnBrowserController {
             columns.forEach { redisplay($0) }
         }
         columns.forEach(applySettings)
+        hostView.applyBackground(settings.palette?.background)
 
         // The model reloads the focused folder after paste, rename, etc.; show its result.
         if columns.indices.contains(focusedIndex), !model.isLoading {
@@ -280,6 +297,7 @@ final class ColumnBrowserController {
     }
 
     private func applySettings(_ column: BrowserColumn) {
+        column.container.separatorColor = settings.palette?.separator
         if case .screenshots = column.source {
             column.list.apply(settings, rowSize: .thumbnails)
         } else {

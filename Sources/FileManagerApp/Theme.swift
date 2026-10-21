@@ -128,6 +128,20 @@ final class ThemeSettings: ObservableObject {
     @Published var foldersFirst: Bool {
         didSet { defaults.set(foldersFirst, forKey: Keys.foldersFirst) }
     }
+    /// Editor-style color theme (Dracula, Nord, …). `.native` uses system colors with `theme` as accent.
+    @Published var colorTheme: ColorTheme {
+        didSet {
+            defaults.set(colorTheme.rawValue, forKey: Keys.colorTheme)
+            applyAppearance()
+        }
+    }
+
+    /// Colors for the current color theme; `nil` for Native.
+    var palette: ThemePalette? { colorTheme.palette }
+
+    /// The accent color in use: the color theme's own, or the chosen accent for Native.
+    var accentNSColor: NSColor { palette?.accent ?? theme.nsColor }
+    var accentColor: Color { Color(nsColor: accentNSColor) }
 
     private let defaults = UserDefaults.standard
 
@@ -137,6 +151,7 @@ final class ThemeSettings: ObservableObject {
         static let rowSize = "rowSize"
         static let alternatingRows = "alternatingRows"
         static let foldersFirst = "foldersFirst"
+        static let colorTheme = "colorTheme"
     }
 
     private init() {
@@ -145,25 +160,50 @@ final class ThemeSettings: ObservableObject {
         rowSize = defaults.string(forKey: Keys.rowSize).flatMap(RowSize.init(rawValue:)) ?? .regular
         alternatingRows = defaults.object(forKey: Keys.alternatingRows) as? Bool ?? false
         foldersFirst = defaults.object(forKey: Keys.foldersFirst) as? Bool ?? true
+        colorTheme = defaults.string(forKey: Keys.colorTheme).flatMap(ColorTheme.init(rawValue:)) ?? .native
     }
 
+    /// Color themes have a fixed light or dark look; Native follows the Light / Dark / System setting.
     func applyAppearance() {
-        NSApp.appearance = appearance.nsAppearance
+        if let palette {
+            NSApp.appearance = NSAppearance(named: palette.isDark ? .darkAqua : .aqua)
+        } else {
+            NSApp.appearance = appearance.nsAppearance
+        }
     }
 }
 
-/// Row with a rounded, theme-colored selection.
+/// Row with a rounded, theme-colored selection, and theme-colored alternate rows.
 final class ThemedRowView: NSTableRowView {
     var accentColor: NSColor = .controlAccentColor {
         didSet { needsDisplay = true }
+    }
+    /// Background for alternate rows when a color theme is active (`nil`: plain).
+    var alternateColor: NSColor? {
+        didSet { needsDisplay = true }
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        if let alternateColor {
+            alternateColor.setFill()
+            bounds.fill()
+        } else {
+            super.drawBackground(in: dirtyRect)
+        }
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
         let rect = bounds.insetBy(dx: 6, dy: 1)
-        let color = isEmphasized ? accentColor : accentColor.withAlphaComponent(0.22)
-        color.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+        let path = NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7)
+        if isEmphasized {
+            // A subtle top-to-bottom gradient makes the selection look less flat.
+            let gradient = NSGradient(starting: accentColor.blended(withFraction: 0.12, of: .white) ?? accentColor, ending: accentColor)
+            gradient?.draw(in: path, angle: -90)
+        } else {
+            accentColor.withAlphaComponent(0.22).setFill()
+            path.fill()
+        }
     }
 
     override var interiorBackgroundStyle: NSView.BackgroundStyle {
