@@ -12,6 +12,8 @@ jobs:
         # macos-15: Xcode 16 / Swift 6.1. macos-26: newest Xcode, matching current Macs.
         runner: [macos-15, macos-26]
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write   # to publish UI screenshots to the ci-snapshots branch
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +37,20 @@ jobs:
           name: ui-snapshots-${{ matrix.runner }}
           path: build/snapshots
           if-no-files-found: warn
+
+      # Also keep the newest screenshots on a separate branch, so they can be fetched with git
+      # (e.g. by Claude, whose environment can't download artifacts). Nothing here is merged.
+      - name: Publish UI screenshots to the ci-snapshots branch
+        if: always() && github.event_name == 'push' && matrix.runner == 'macos-26'
+        run: |
+          [ -d build/snapshots ] || exit 0
+          cd build/snapshots
+          git init -q
+          git checkout -q -b ci-snapshots
+          echo "Screenshots from ${GITHUB_SHA} (${GITHUB_REF_NAME})" > README.md
+          git add .
+          git -c user.name="github-actions" -c user.email="github-actions@users.noreply.github.com" commit -q -m "UI screenshots for ${GITHUB_SHA}"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" ci-snapshots
 
       - name: Build app bundle
         run: ./scripts/build-app.sh
