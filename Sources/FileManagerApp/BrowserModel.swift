@@ -1,78 +1,211 @@
 import AppKit
+import Combine
 import FileCore
 
-/// State of one browser window: current folder, its items, selection and history.
+enum ViewMode: String, CaseIterable {
+    case list, columns
+}
+
+/// One piece of the path bar.
+struct PathComponent: Identifiable {
+    let id: String
+    let title: String
+    /// Folder to open when clicked; `nil` for a smart location.
+    let url: URL?
+    let systemImage: String?
+}
+
+/// State of one browser window: current location, its items, selection and history.
 @MainActor
 final class BrowserModel: ObservableObject {
+    @Published private(set) var location: Location
+    /// The folder being worked in: paste, new folder and drops go here. In column view this is the
+    /// folder of the focused column, which may be deeper than `location`.
     @Published private(set) var currentURL: URL
+    /// Items shown: `allItems` sorted and filtered.
     @Published private(set) var items: [FileItem] = []
+    @Published private(set) var allItems: [FileItem] = []
     @Published var selection: Set<URL> = []
-    @Published var sort = FileSort() {
-        didSet { items = sort.sorted(items) }
+    @Published var sort: FileSort {
+        didSet {
+            guard sort != oldValue else { return }
+            sorts[location.kind] = sort
+            applyFilterAndSort()
+        }
     }
     @Published var showHidden = false {
-        didSet { reload() }
+        didSet { if showHidden != oldValue { reload() } }
     }
+    @Published var filterText = "" {
+        didSet { if filterText != oldValue { applyFilterAndSort() } }
+    }
+    @Published var viewMode: ViewMode {
+        didSet {
+            guard viewMode != oldValue else { return }
+            UserDefaults.standard.set(viewMode.rawValue, forKey: "viewMode")
+            navigationID += 1
+        }
+    }
+    /// Preview panel next to the list view.
+    @Published var showInspector = false
     @Published var errorMessage: String?
-    /// Description of a running operation, e.g. "Copying 3 items…".
+    /// Description of a running operation, e.g. "Copying 3 items".
     @Published private(set) var activity: String?
     /// Item-level progress of a running copy/move.
     @Published private(set) var progress: OperationProgress?
     @Published private(set) var availableCapacity: Int64?
+    @Published private(set) var isLoading = false
     /// An item whose name should become editable in the list (set by Rename and New Folder).
     @Published var renameRequest: URL?
+    /// Changes whenever the user goes to a new place or switches views; the column view rebuilds then.
+    @Published private(set) var navigationID = 0
 
     let clipboard: ClipboardController
 
     private let operations = FileOperations()
-    private var backStack: [URL] = []
-    private var forwardStack: [URL] = []
+    private let settings = ThemeSettings.shared
+    private(set) var baseURL: URL
+    private var sorts: [Location.Kind: FileSort] = [:]
+    private var backStack: [Location] = []
+    private var forwardStack: [Location] = []
     private var watcher: DirectoryWatcher?
     private var pendingReload: DispatchWorkItem?
     private var loadGeneration = 0
     private var operationTask: Task<Void, Never>?
+    private var subscriptions: Set<AnyCancellable> = []
 
-    init(clipboard: ClipboardController, startURL: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    init(clipboard: ClipboardController, start: Location = .folder(FileManager.default.homeDirectoryForCurrentUser)) {
         self.clipboard = clipboard
-        currentURL = startURL
-        load(startURL)
+        location = start
+        baseURL = start.baseURL
+        currentURL = start.baseURL
+        sort = start.kind.defaultSort
+        viewMode = UserDefaults.standard.string(forKey: "viewMode").flatMap(ViewMode.init(rawValue:)) ?? .list
+
+        settings.$foldersFirst
+            .dropFirst()
+            .sink { [weak self] _ in
+                // Published fires before the value is stored; re-sort on the next turn.
+                DispatchQueue.main.async { self?.applyFilterAndSort() }
+            }
+            .store(in: &subscriptions)
+
+        load(start)
     }
 
     // MARK: - Derived state
 
-    var title: String { FileManager.default.displayName(atPath: currentURL.path) }
+    var title: String {
+        if let smartTitle = location.smartTitle, isAtBase {
+            return smartTitle
+        }
+        return FileManager.default.displayName(atPath: currentURL.path)
+    }
+
+    var pathComponents: [PathComponent] {
+        if let smartTitle = location.smartTitle, isAtBase {
+            return [PathComponent(id: smartTitle, title: smartTitle, url: nil, systemImage: location.smartSystemImage)]
+        }
+        var result: [PathComponent] = []
+        var url = currentURL.standardizedFileURL
+        for _ in 0..<128 {
+            result.insert(PathComponent(
+                id: url.path, title: FileManager.default.displayName(atPath: url.path), url: url, systemImage: nil
+            ), at: 0)
+            if url.path == "/" { break }
+            url = url.deletingLastPathComponent().standardizedFileURL
+        }
+        return result
+    }
+
     var canGoBack: Bool { !backStack.isEmpty }
     var canGoForward: Bool { !forwardStack.isEmpty }
-    var canGoUp: Bool { currentURL.standardizedFileURL.path != "/" }
+    var canGoUp: Bool { location.kind == .folder && currentURL.standardizedFileURL.path != "/" }
     var selectedItems: [FileItem] { items.filter { selection.contains($0.url) } }
-    var canPaste: Bool { clipboard.contents != nil && activity == nil }
+    var acceptsNewItems: Bool { location.acceptsNewItems || !isAtBase }
+    var canPaste: Bool { clipboard.contents != nil && !isBusy && acceptsNewItems }
     var isBusy: Bool { activity != nil }
+
+    /// Sort with the "folders on top" preference applied.
+    var effectiveSort: FileSort {
+        var sort = sort
+        sort.foldersFirst = settings.foldersFirst
+        return sort
+    }
+
+    /// True when showing the location itself (not a subfolder opened in column view).
+    private var isAtBase: Bool {
+        currentURL.standardizedFileURL.path == baseURL.standardizedFileURL.path
+    }
+
+    /// What to load for `folder`: the location's own source at its base, a plain folder below it.
+    func itemSource(for folder: URL) -> ItemSource {
+        guard folder.standardizedFileURL.path == baseURL.standardizedFileURL.path else { return .folder(folder) }
+        switch location {
+        case .folder: return .folder(folder)
+        case .screenshots: return .screenshots(folder)
+        case .recents: return .recents
+        }
+    }
+
+    /// Sorts and filters `items` the way the list shows them.
+    static func arrange(_ items: [FileItem], sort: FileSort, filter: String) -> [FileItem] {
+        let sorted = sort.sorted(items)
+        let query = filter.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return sorted }
+        return sorted.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
 
     // MARK: - Navigation
 
     func navigate(to url: URL, selecting paths: Set<String> = []) {
-        guard url.standardizedFileURL.path != currentURL.standardizedFileURL.path else { return }
-        backStack.append(currentURL)
+        navigate(to: .folder(url), selecting: paths)
+    }
+
+    func navigate(to newLocation: Location, selecting paths: Set<String> = []) {
+        if case .folder(let url) = newLocation, case .folder = location,
+           url.standardizedFileURL.path == currentURL.standardizedFileURL.path, isAtBase {
+            return
+        }
+        if newLocation == location, newLocation.kind != .folder, isAtBase {
+            return
+        }
+        backStack.append(location)
         forwardStack.removeAll()
-        load(url, selecting: paths)
+        load(newLocation, selecting: paths)
     }
 
     func goBack() {
-        guard let url = backStack.popLast() else { return }
-        forwardStack.append(currentURL)
-        load(url)
+        guard let previous = backStack.popLast() else { return }
+        forwardStack.append(location)
+        load(previous)
     }
 
     func goForward() {
-        guard let url = forwardStack.popLast() else { return }
-        backStack.append(currentURL)
-        load(url)
+        guard let next = forwardStack.popLast() else { return }
+        backStack.append(location)
+        load(next)
     }
 
     func goUp() {
         guard canGoUp else { return }
         // Select the folder we came from, like Finder does.
         navigate(to: currentURL.deletingLastPathComponent(), selecting: [currentURL.standardizedFileURL.path])
+    }
+
+    /// Opens the folder containing `item` with the item selected (useful from Recents).
+    func showInEnclosingFolder(_ item: FileItem) {
+        navigate(to: item.url.deletingLastPathComponent(), selecting: [item.url.path])
+    }
+
+    func open(_ itemsToOpen: [FileItem]) {
+        if itemsToOpen.count == 1, let item = itemsToOpen.first, item.isBrowsable {
+            navigate(to: item.browseURL)
+            return
+        }
+        for item in itemsToOpen where !item.isBrowsable {
+            NSWorkspace.shared.open(item.url)
+        }
     }
 
     func open(_ itemsToOpen: [FileItem], withApplicationAt application: URL) {
@@ -86,53 +219,96 @@ final class BrowserModel: ObservableObject {
         NSWorkspace.shared.open([folder ?? currentURL], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    func open(_ itemsToOpen: [FileItem]) {
-        if itemsToOpen.count == 1, let item = itemsToOpen.first, item.isBrowsable {
-            navigate(to: item.browseURL)
-            return
+    private func load(_ newLocation: Location, selecting paths: Set<String> = []) {
+        if newLocation.kind != location.kind {
+            sorts[location.kind] = sort
+            sort = sorts[newLocation.kind] ?? newLocation.kind.defaultSort
         }
-        for item in itemsToOpen where !item.isBrowsable {
-            NSWorkspace.shared.open(item.url)
+        location = newLocation
+        baseURL = newLocation.baseURL
+        currentURL = baseURL
+        allItems = []
+        items = []
+        selection = []
+        filterText = ""
+        navigationID += 1
+        watch(currentURL)
+        reload(selecting: paths)
+    }
+
+    /// Column view: the user moved focus to the column showing `folder`.
+    /// Doesn't touch history; the column view already loaded `newItems`.
+    func focusColumn(folder: URL, items newItems: [FileItem], selection newSelection: Set<URL>) {
+        if folder.standardizedFileURL.path != currentURL.standardizedFileURL.path {
+            currentURL = folder
+            watch(folder)
+            updateCapacity()
+        }
+        if newItems != allItems {
+            allItems = newItems
+            applyFilterAndSort()
+        }
+        if newSelection != selection {
+            selection = newSelection
         }
     }
 
-    private func load(_ url: URL, selecting paths: Set<String> = []) {
-        currentURL = url
-        items = []
-        selection = []
-        watcher = DirectoryWatcher(url: url) { [weak self] in
+    private func watch(_ folder: URL) {
+        guard itemSource(for: folder) != .recents else {
+            watcher = nil
+            return
+        }
+        watcher = DirectoryWatcher(url: folder) { [weak self] in
             Task { @MainActor in self?.scheduleReload() }
         }
-        reload(selecting: paths)
     }
 
     /// Re-reads the current folder in the background. Keeps the selection unless `paths` is given.
     func reload(selecting paths: Set<String>? = nil) {
         loadGeneration += 1
         let generation = loadGeneration
-        let url = currentURL
+        let source = itemSource(for: currentURL)
         let includeHidden = showHidden
-        let sort = sort
         let keep = paths ?? Set(selection.map(\.path))
+        isLoading = true
 
         Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                Result { try sort.sorted(DirectoryLister.contents(of: url, includeHidden: includeHidden)) }
-            }.value
+            let result: Result<[FileItem], Error>
+            do {
+                result = .success(try await ItemLoader.load(source, includeHidden: includeHidden))
+            } catch {
+                result = .failure(error)
+            }
             guard generation == loadGeneration else { return }
+            isLoading = false
 
             switch result {
             case .success(let loaded):
-                items = loaded
-                selection = Set(loaded.filter { keep.contains($0.url.path) }.map(\.url))
+                allItems = loaded
+                applyFilterAndSort()
+                selection = Set(items.filter { keep.contains($0.url.path) }.map(\.url))
             case .failure(let error):
+                allItems = []
                 items = []
                 selection = []
                 errorMessage = error.localizedDescription
             }
-            availableCapacity = (try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
-                .volumeAvailableCapacityForImportantUsage
+            updateCapacity()
         }
+    }
+
+    private func applyFilterAndSort() {
+        items = Self.arrange(allItems, sort: effectiveSort, filter: filterText)
+        let visible = Set(items.map(\.url))
+        let kept = selection.filter { visible.contains($0) }
+        if kept != selection {
+            selection = kept
+        }
+    }
+
+    private func updateCapacity() {
+        availableCapacity = (try? currentURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage
     }
 
     private func scheduleReload() {
@@ -175,11 +351,11 @@ final class BrowserModel: ObservableObject {
     /// Makes copies of the selection next to the originals ("file copy.txt").
     func duplicateSelection(undoManager: UndoManager?) {
         let urls = selectedItems.map(\.url)
-        guard !urls.isEmpty else { return }
-        transfer(urls, into: currentURL, mode: .copy, actionName: "Duplicate", undoManager: undoManager)
+        guard !urls.isEmpty, let folder = urls.first?.deletingLastPathComponent() else { return }
+        transfer(urls, into: folder, mode: .copy, actionName: "Duplicate", undoManager: undoManager)
     }
 
-    /// Handles files dropped onto the list or onto a folder in it.
+    /// Handles files dropped onto a list or onto a folder in it.
     func drop(_ urls: [URL], into destination: URL, mode: FileClipboard.Mode, undoManager: UndoManager?) {
         transfer(urls, into: destination, mode: mode, actionName: mode == .cut ? "Move" : "Copy", undoManager: undoManager)
     }
@@ -222,6 +398,8 @@ final class BrowserModel: ObservableObject {
                 report(result.failures, verb: mode == .cut ? "moved" : "copied")
                 if destination.standardizedFileURL.path == currentURL.standardizedFileURL.path {
                     reload(selecting: Set(result.resultURLs.map(\.path)))
+                } else {
+                    reload()
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -236,6 +414,7 @@ final class BrowserModel: ObservableObject {
     // MARK: - New folder & rename
 
     func newFolder(undoManager: UndoManager?) {
+        guard acceptsNewItems else { return }
         let directory = currentURL
         Task {
             do {

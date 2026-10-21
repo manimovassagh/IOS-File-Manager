@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 APP_NAME="File Manager"
 PRODUCT="FileManagerApp"
 BUNDLE_ID="com.manimovassagh.filemanager"
-VERSION="0.1.0"
+VERSION="0.2.0"
 
 swift build -c release --product "$PRODUCT"
 BIN_DIR="$(swift build -c release --show-bin-path)"
@@ -17,6 +17,7 @@ APP="build/$APP_NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/$PRODUCT" "$APP/Contents/MacOS/$PRODUCT"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -27,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key><string>$APP_NAME</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>$PRODUCT</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>1</string>
@@ -45,5 +47,6 @@ echo "Built $APP"
 if [[ "${1:-}" == "--install" ]]; then
     rm -rf "/Applications/$APP_NAME.app"
     cp -R "$APP" /Applications/
+    touch "/Applications/$APP_NAME.app"  # refresh the Dock/Finder icon cache
     echo "Installed to /Applications/$APP_NAME.app"
 fi
