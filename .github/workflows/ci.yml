@@ -23,8 +23,18 @@ jobs:
       - name: Build
         run: swift build
 
-      - name: Test
+      - name: Test (unit + end-to-end)
         run: swift test
+        env:
+          SNAPSHOT_DIR: ${{ github.workspace }}/build/snapshots
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-snapshots-${{ matrix.runner }}
+          path: build/snapshots
+          if-no-files-found: warn
 
       - name: Build app bundle
         run: ./scripts/build-app.sh

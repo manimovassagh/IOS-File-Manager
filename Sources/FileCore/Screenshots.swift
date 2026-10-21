@@ -9,8 +9,14 @@ public enum Screenshots {
     /// English name prefixes, used when the attribute is missing (e.g. files copied from elsewhere).
     static let namePrefixes = ["Screenshot ", "Screen Shot ", "Screen Recording "]
 
+    /// Tests point this at a temporary folder instead of the real screenshot location.
+    nonisolated(unsafe) public static var folderOverride: URL?
+
     /// The folder screenshots are saved to (System Settings / Screenshot app "Save to"); Desktop by default.
     public static var folder: URL {
+        if let folderOverride {
+            return folderOverride
+        }
         let defaults = UserDefaults(suiteName: "com.apple.screencapture")
         if let path = defaults?.string(forKey: "location"), !path.isEmpty {
             let expanded = (path as NSString).expandingTildeInPath

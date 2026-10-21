@@ -13,18 +13,80 @@ struct ColumnBrowserView: NSViewRepresentable {
         ColumnBrowserController(model: model)
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
-        context.coordinator.scrollView
+    func makeNSView(context: Context) -> ColumnsHostView {
+        context.coordinator.hostView
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    func updateNSView(_ hostView: ColumnsHostView, context: Context) {
         context.coordinator.update(settings: settings, cutPaths: cutPaths)
     }
 }
 
+/// Lays the columns out side by side in a horizontally scrolling area.
+///
+/// Uses plain frames rather than Auto Layout: a stack view inside a scroll view's document view
+/// is easy to get wrong and can end up with zero size, leaving the area blank.
+final class ColumnsHostView: NSView {
+    let scrollView = NSScrollView()
+    private let documentView = FlippedView()
+    private(set) var panes: [(view: NSView, width: CGFloat)] = []
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        scrollView.hasHorizontalScroller = true
+        scrollView.hasVerticalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.documentView = documentView
+        scrollView.frame = bounds
+        scrollView.autoresizingMask = [.width, .height]
+        addSubview(scrollView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    func setPanes(_ newPanes: [(view: NSView, width: CGFloat)]) {
+        let newViews = Set(newPanes.map { ObjectIdentifier($0.view) })
+        for pane in panes where !newViews.contains(ObjectIdentifier(pane.view)) {
+            pane.view.removeFromSuperview()
+        }
+        for pane in newPanes where pane.view.superview !== documentView {
+            documentView.addSubview(pane.view)
+        }
+        panes = newPanes
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        scrollView.frame = bounds
+        let height = max(scrollView.contentSize.height, 1)
+        var x: CGFloat = 0
+        for pane in panes {
+            pane.view.frame = NSRect(x: x, y: 0, width: pane.width, height: height)
+            x += pane.width
+        }
+        documentView.frame = NSRect(x: 0, y: 0, width: max(x, scrollView.contentSize.width), height: height)
+    }
+
+    func scrollToEnd() {
+        guard let last = panes.last?.view else { return }
+        documentView.scrollToVisible(last.frame)
+    }
+}
+
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// One column: a file list with its own items and folder watcher.
 @MainActor
-private final class Column {
+final class BrowserColumn {
     let list: FileListController
     let source: ItemSource
     let container = NSView()
@@ -35,6 +97,16 @@ private final class Column {
     init(list: FileListController, source: ItemSource) {
         self.list = list
         self.source = source
+
+        // Frame-based: the list fills the column, with a 1 pt separator on the right.
+        list.scrollView.frame = NSRect(x: 0, y: 0, width: ColumnBrowserController.columnWidth - 1, height: 100)
+        list.scrollView.autoresizingMask = [.width, .height]
+        container.addSubview(list.scrollView)
+        let separator = NSBox(frame: NSRect(x: ColumnBrowserController.columnWidth - 1, y: 0, width: 1, height: 100))
+        separator.boxType = .separator
+        separator.autoresizingMask = [.minXMargin, .height]
+        container.addSubview(separator)
+        container.frame = NSRect(x: 0, y: 0, width: ColumnBrowserController.columnWidth, height: 100)
     }
 
     var folder: URL { list.folder }
@@ -43,13 +115,12 @@ private final class Column {
 @MainActor
 final class ColumnBrowserController {
     static let columnWidth: CGFloat = 240
-    static let previewWidth: CGFloat = 300
+    static let previewWidth: CGFloat = 320
 
-    let scrollView = NSScrollView()
+    let hostView = ColumnsHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
     private let model: BrowserModel
-    private let stack = NSStackView()
-    private var columns: [Column] = []
-    private var preview: NSHostingView<FilePreview>?
+    private(set) var columns: [BrowserColumn] = []
+    private(set) var preview: NSHostingView<FilePreview>?
     private var focusedIndex = 0
     private var navigationID = -1
     private var showHidden = false
@@ -60,24 +131,6 @@ final class ColumnBrowserController {
 
     init(model: BrowserModel) {
         self.model = model
-        stack.orientation = .horizontal
-        stack.spacing = 0
-        stack.alignment = .top
-        stack.distribution = .fill
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        scrollView.hasHorizontalScroller = true
-        scrollView.hasVerticalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .noBorder
-        scrollView.drawsBackground = false
-        scrollView.documentView = stack
-        let clip = scrollView.contentView
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: clip.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
-            stack.heightAnchor.constraint(equalTo: clip.heightAnchor),
-        ])
     }
 
     // MARK: - Updates from SwiftUI
@@ -99,7 +152,7 @@ final class ColumnBrowserController {
         } else if displayChanged {
             columns.forEach { redisplay($0) }
         }
-        columns.forEach { $0.list.apply(settings) }
+        columns.forEach(applySettings)
 
         // The model reloads the focused folder after paste, rename, etc.; show its result.
         if columns.indices.contains(focusedIndex), !model.isLoading {
@@ -116,9 +169,8 @@ final class ColumnBrowserController {
     // MARK: - Building columns
 
     private func rebuild() {
-        columns.forEach { $0.container.removeFromSuperview() }
         columns.removeAll()
-        removePreview()
+        preview = nil
         focusedIndex = 0
         let root = addColumn(folder: model.baseURL, source: model.itemSource(for: model.baseURL))
         root.list.acceptsNewItems = model.location.acceptsNewItems
@@ -126,42 +178,17 @@ final class ColumnBrowserController {
     }
 
     @discardableResult
-    private func addColumn(folder: URL, source: ItemSource) -> Column {
+    private func addColumn(folder: URL, source: ItemSource) -> BrowserColumn {
         let list = FileListController(style: .column, model: model, folder: folder)
-        let column = Column(list: list, source: source)
-        list.apply(settings)
+        let column = BrowserColumn(list: list, source: source)
+        applySettings(column)
         list.onSelectionChange = { [weak self] list in self?.selectionChanged(in: list) }
         list.onFocus = { [weak self] list in self?.focusChanged(to: list) }
         list.onOpen = { [weak self] list, items in self?.open(items, from: list) }
         list.onMoveLeft = { [weak self] list in self?.moveLeft(from: list) ?? false }
         list.onMoveRight = { [weak self] list in self?.moveRight(from: list) ?? false }
-
-        let container = column.container
-        container.translatesAutoresizingMaskIntoConstraints = false
-        list.scrollView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(list.scrollView)
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(separator)
-        NSLayoutConstraint.activate([
-            container.widthAnchor.constraint(equalToConstant: Self.columnWidth),
-            list.scrollView.topAnchor.constraint(equalTo: container.topAnchor),
-            list.scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            list.scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            list.scrollView.trailingAnchor.constraint(equalTo: separator.leadingAnchor),
-            separator.topAnchor.constraint(equalTo: container.topAnchor),
-            separator.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            separator.widthAnchor.constraint(equalToConstant: 1),
-        ])
-        if let preview {
-            stack.insertArrangedSubview(container, at: stack.arrangedSubviews.firstIndex(of: preview) ?? stack.arrangedSubviews.count)
-        } else {
-            stack.addArrangedSubview(container)
-        }
-        container.heightAnchor.constraint(equalTo: stack.heightAnchor).isActive = true
         columns.append(column)
+        layoutPanes()
 
         if source != .recents {
             column.watcher = DirectoryWatcher(url: folder) { [weak self, weak column] in
@@ -172,11 +199,27 @@ final class ColumnBrowserController {
             }
         }
         load(column)
-        scrollToEnd()
         return column
     }
 
-    private func load(_ column: Column) {
+    private func applySettings(_ column: BrowserColumn) {
+        if case .screenshots = column.source {
+            column.list.apply(settings, rowSize: .thumbnails)
+        } else {
+            column.list.apply(settings)
+        }
+    }
+
+    private func layoutPanes() {
+        var panes: [(view: NSView, width: CGFloat)] = columns.map { ($0.container, Self.columnWidth) }
+        if let preview {
+            panes.append((preview, Self.previewWidth))
+        }
+        hostView.setPanes(panes)
+        DispatchQueue.main.async { [weak self] in self?.hostView.scrollToEnd() }
+    }
+
+    private func load(_ column: BrowserColumn) {
         column.generation += 1
         let generation = column.generation
         let includeHidden = showHidden
@@ -192,7 +235,7 @@ final class ColumnBrowserController {
         }
     }
 
-    private func redisplay(_ column: Column, selectedPaths: Set<String>? = nil) {
+    private func redisplay(_ column: BrowserColumn, selectedPaths: Set<String>? = nil) {
         let items = BrowserModel.arrange(column.allItems, sort: sort, filter: filterText)
         column.list.display(items, selectedPaths: selectedPaths, cutPaths: cutPaths)
     }
@@ -210,55 +253,36 @@ final class ColumnBrowserController {
                 return
             }
             truncate(after: index)
-            removePreview()
+            preview = nil
             addColumn(folder: folder, source: .folder(folder))
         } else {
             truncate(after: index)
             if selected.count == 1 {
                 showPreview(selected[0])
-            } else {
-                removePreview()
+            } else if preview != nil {
+                preview = nil
+                layoutPanes()
             }
         }
     }
 
     private func truncate(after index: Int) {
-        while columns.count > index + 1 {
-            let column = columns.removeLast()
-            column.container.removeFromSuperview()
-        }
+        guard columns.count > index + 1 else { return }
+        columns.removeSubrange((index + 1)...)
         if focusedIndex > index {
             focusedIndex = index
         }
+        layoutPanes()
     }
 
     private func showPreview(_ item: FileItem) {
         if let preview {
+            guard preview.rootView.item != item else { return }
             preview.rootView = FilePreview(item: item)
         } else {
-            let host = NSHostingView(rootView: FilePreview(item: item))
-            host.translatesAutoresizingMaskIntoConstraints = false
-            stack.addArrangedSubview(host)
-            NSLayoutConstraint.activate([
-                host.widthAnchor.constraint(equalToConstant: Self.previewWidth),
-                host.heightAnchor.constraint(equalTo: stack.heightAnchor),
-            ])
-            preview = host
+            preview = NSHostingView(rootView: FilePreview(item: item))
         }
-        scrollToEnd()
-    }
-
-    private func removePreview() {
-        preview?.removeFromSuperview()
-        preview = nil
-    }
-
-    private func scrollToEnd() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let last = self.stack.arrangedSubviews.last else { return }
-            self.stack.layoutSubtreeIfNeeded()
-            self.stack.scrollToVisible(last.frame)
-        }
+        layoutPanes()
     }
 
     // MARK: - User actions

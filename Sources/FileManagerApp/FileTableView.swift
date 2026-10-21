@@ -39,7 +39,11 @@ struct FileTableView: NSViewRepresentable {
         }
 
         func update(settings: ThemeSettings, cutPaths: Set<String>) {
-            list.apply(settings)
+            if case .screenshots = model.itemSource(for: model.currentURL) {
+                list.apply(settings, rowSize: .thumbnails)
+            } else {
+                list.apply(settings)
+            }
             list.folder = model.currentURL
             list.acceptsNewItems = model.acceptsNewItems
             list.showSort(model.effectiveSort)

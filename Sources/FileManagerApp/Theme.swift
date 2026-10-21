@@ -60,14 +60,20 @@ enum AppTheme: String, CaseIterable, Identifiable {
 
 enum RowSize: String, CaseIterable, Identifiable {
     case compact, regular, large
+    /// Tall rows with big thumbnails, used for Screenshots (not offered in Settings).
+    case thumbnails
 
     var id: String { rawValue }
+
+    /// The sizes offered in Settings.
+    static let selectable: [RowSize] = [.compact, .regular, .large]
 
     var title: String {
         switch self {
         case .compact: return "Compact"
         case .regular: return "Regular"
         case .large: return "Large"
+        case .thumbnails: return "Thumbnails"
         }
     }
 
@@ -76,6 +82,7 @@ enum RowSize: String, CaseIterable, Identifiable {
         case .compact: return 22
         case .regular: return 28
         case .large: return 36
+        case .thumbnails: return 64
         }
     }
 
@@ -84,6 +91,7 @@ enum RowSize: String, CaseIterable, Identifiable {
         case .compact: return 16
         case .regular: return 20
         case .large: return 26
+        case .thumbnails: return 56
         }
     }
 
@@ -92,6 +100,7 @@ enum RowSize: String, CaseIterable, Identifiable {
         case .compact: return 12
         case .regular: return 13
         case .large: return 14
+        case .thumbnails: return 13
         }
     }
 }
