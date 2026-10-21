@@ -21,9 +21,10 @@ struct FilePreview: View {
         }
     }
 
-    /// The image takes most of the pane: two thirds of its height (at least 220 pt).
+    /// The image takes all the height the name, details and Open button don't need (about 300 pt),
+    /// so everything fits without scrolling; never less than 200 pt.
     static func imageHeight(for size: CGSize) -> CGFloat {
-        max(220, size.height * 0.66)
+        max(200, size.height - 300)
     }
 
     private func content(imageHeight: CGFloat) -> some View {

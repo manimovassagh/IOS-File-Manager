@@ -156,7 +156,7 @@ final class BrowserEndToEndTests: XCTestCase {
         XCTAssertTrue(wait(pump) { controller.preview != nil })
         let preview = try XCTUnwrap(controller.preview)
         assertPreviewFillsRemainingSpace(preview, in: controller.hostView)
-        XCTAssertGreaterThan(FilePreview.imageHeight(for: preview.frame.size), preview.frame.height * 0.6)
+        XCTAssertGreaterThanOrEqual(FilePreview.imageHeight(for: preview.frame.size), preview.frame.height - 300)
         wait(timeout: 3) { false }  // let the full-size image load
         snapshot("screenshots-2-columns-preview")
     }
@@ -198,8 +198,6 @@ final class BrowserEndToEndTests: XCTestCase {
         _ preview: NSView, in host: ColumnsHostView, file: StaticString = #filePath, line: UInt = #line
     ) {
         XCTAssertGreaterThanOrEqual(preview.frame.width, ColumnBrowserController.minPreviewWidth, file: file, line: line)
-        XCTAssertEqual(preview.frame.maxX, max(host.scrollView.contentSize.width, preview.frame.maxX), accuracy: 1,
-                       "Preview should reach the right edge", file: file, line: line)
         XCTAssertEqual(preview.frame.maxX, host.scrollView.contentSize.width, accuracy: 1,
                        "Preview should fill the rest of the window", file: file, line: line)
     }
