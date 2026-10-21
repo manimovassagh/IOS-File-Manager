@@ -321,10 +321,13 @@ final class BrowserModel: ObservableObject {
 
     private func registerUndo(_ record: OperationRecord, actionName: String, undoManager: UndoManager?) {
         guard !record.isEmpty, let undoManager else { return }
-        undoManager.registerUndo(withTarget: self) { [weak undoManager] model in
-            guard let undoManager else { return }
+        let manager = WeakUndoManager(undoManager)
+        undoManager.registerUndo(withTarget: self) { model in
             // Undo is always invoked from the main thread (menu or ⌘Z).
-            MainActor.assumeIsolated { model.revert(record, actionName: actionName, undoManager: undoManager) }
+            MainActor.assumeIsolated {
+                guard let undoManager = manager.value else { return }
+                model.revert(record, actionName: actionName, undoManager: undoManager)
+            }
         }
         undoManager.setActionName(actionName)
     }
@@ -336,9 +339,10 @@ final class BrowserModel: ObservableObject {
     /// so it goes in a box that the background work fills in.
     private func revert(_ record: OperationRecord, actionName: String, undoManager: UndoManager) {
         let inverse = RecordBox()
-        undoManager.registerUndo(withTarget: self) { [weak undoManager] model in
+        let manager = WeakUndoManager(undoManager)
+        undoManager.registerUndo(withTarget: self) { model in
             MainActor.assumeIsolated {
-                guard let undoManager, let record = inverse.record else { return }
+                guard let undoManager = manager.value, let record = inverse.record else { return }
                 model.revert(record, actionName: actionName, undoManager: undoManager)
             }
         }
@@ -365,4 +369,14 @@ final class BrowserModel: ObservableObject {
 @MainActor
 private final class RecordBox {
     var record: OperationRecord?
+}
+
+/// Lets undo handlers refer back to their undo manager without a retain cycle.
+/// Only touched on the main thread, where undo runs.
+private final class WeakUndoManager: @unchecked Sendable {
+    weak var value: UndoManager?
+
+    init(_ value: UndoManager) {
+        self.value = value
+    }
 }
