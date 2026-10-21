@@ -11,46 +11,60 @@ struct FilePreview: View {
     @StateObject private var loader = PreviewLoader()
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                thumbnail
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 210)
-
-                VStack(spacing: 4) {
-                    Text(item.name)
-                        .font(.headline)
-                        .multilineTextAlignment(.center)
-                        .textSelection(.enabled)
-                    Text(summary)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let details = loader.details {
-                    VStack(spacing: 6) {
-                        if let created = details.created { row("Created", created.formatted(date: .abbreviated, time: .shortened)) }
-                        if let modified = details.modified { row("Modified", modified.formatted(date: .abbreviated, time: .shortened)) }
-                        if let lastOpened = details.lastOpened { row("Last opened", lastOpened.formatted(date: .abbreviated, time: .shortened)) }
-                        if let dimensions = details.dimensions { row("Dimensions", dimensions) }
-                        if let itemCount = details.itemCount { row("Contains", "\(itemCount) \(itemCount == 1 ? "item" : "items")") }
-                        row("Where", item.url.deletingLastPathComponent().path)
-                    }
-                    .padding(12)
-                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-                }
-
-                Button("Open") {
-                    NSWorkspace.shared.open(item.url)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+        GeometryReader { geometry in
+            ScrollView {
+                content(imageHeight: Self.imageHeight(for: geometry.size))
             }
-            .padding(18)
         }
         .task(id: item.url) {
             await loader.load(item.url)
         }
+    }
+
+    /// The image takes all the height the name, details and Open button don't need (about 300 pt),
+    /// so everything fits without scrolling; never less than 200 pt.
+    static func imageHeight(for size: CGSize) -> CGFloat {
+        max(200, size.height - 300)
+    }
+
+    private func content(imageHeight: CGFloat) -> some View {
+        VStack(spacing: 14) {
+            thumbnail
+                .frame(maxWidth: .infinity)
+                .frame(height: imageHeight)
+
+            VStack(spacing: 4) {
+                Text(item.name)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+                Text(summary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let details = loader.details {
+                VStack(spacing: 6) {
+                    if let created = details.created { row("Created", created.formatted(date: .abbreviated, time: .shortened)) }
+                    if let modified = details.modified { row("Modified", modified.formatted(date: .abbreviated, time: .shortened)) }
+                    if let lastOpened = details.lastOpened { row("Last opened", lastOpened.formatted(date: .abbreviated, time: .shortened)) }
+                    if let dimensions = details.dimensions { row("Dimensions", dimensions) }
+                    if let itemCount = details.itemCount { row("Contains", "\(itemCount) \(itemCount == 1 ? "item" : "items")") }
+                    row("Where", item.url.deletingLastPathComponent().path)
+                }
+                .padding(12)
+                .frame(maxWidth: 460)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+            }
+
+            Button("Open") {
+                NSWorkspace.shared.open(item.url)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(18)
     }
 
     @ViewBuilder
@@ -147,7 +161,8 @@ final class PreviewLoader: ObservableObject {
 
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
-            size: CGSize(width: 560, height: 420),
+            // Large enough to stay sharp when the preview fills a big window.
+            size: CGSize(width: 1600, height: 1200),
             scale: NSScreen.main?.backingScaleFactor ?? 2,
             representationTypes: .thumbnail
         )
