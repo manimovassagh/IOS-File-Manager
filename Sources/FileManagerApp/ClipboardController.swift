@@ -9,6 +9,8 @@ import FileCore
 @MainActor
 final class ClipboardController: ObservableObject {
     @Published private(set) var contents: FileClipboard?
+    /// A short message for the user, e.g. when a cut was replaced by something copied elsewhere.
+    @Published var notice: String?
 
     private let pasteboard = NSPasteboard.general
     private var knownChangeCount = -1
@@ -43,11 +45,21 @@ final class ClipboardController: ObservableObject {
     func refreshFromPasteboard() {
         guard pasteboard.changeCount != knownChangeCount else { return }
         knownChangeCount = pasteboard.changeCount
+        let hadCut = contents?.mode == .cut
         let urls = pasteboard.readObjects(
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
         ) as? [URL] ?? []
         contents = urls.isEmpty ? nil : FileClipboard(urls: urls, mode: .copy)
+        if hadCut {
+            notice = "Your cut files were not moved: something else was copied, so the cut was cancelled."
+        }
+    }
+
+    /// Esc in the file list: forget a pending cut.
+    func cancelCut() {
+        guard contents?.mode == .cut else { return }
+        clear()
     }
 
     /// Cut items are gone from their old location after a paste, so the clipboard is emptied.

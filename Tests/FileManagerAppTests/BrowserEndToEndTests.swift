@@ -190,6 +190,98 @@ final class BrowserEndToEndTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "viewMode")
     }
 
+    // MARK: - Themes
+
+    /// Each color theme paints the whole window (list, header, sidebar, bars); screenshots for review.
+    @MainActor
+    func testColorThemesPaintTheWindow() throws {
+        defer {
+            ThemeSettings.shared.colorTheme = .native
+            UserDefaults.standard.removeObject(forKey: "viewMode")
+            UserDefaults.standard.removeObject(forKey: "lastLocation")
+        }
+        UserDefaults.standard.set(root.path, forKey: "lastLocation")
+        let themes: [(ColorTheme, ViewMode)] = [
+            (.dracula, .list), (.nord, .columns), (.tokyoNight, .list), (.catppuccinMocha, .columns),
+            (.catppuccinLatte, .list), (.gruvbox, .list), (.githubLight, .columns),
+        ]
+        for (theme, mode) in themes {
+            let palette = try XCTUnwrap(theme.palette)
+            ThemeSettings.shared.colorTheme = theme
+            UserDefaults.standard.set(mode.rawValue, forKey: "viewMode")
+            show(NSHostingView(rootView: BrowserView(clipboard: ClipboardController(), settings: .shared)))
+
+            XCTAssertTrue(wait { (findView(FileTable.self, in: window?.contentView)?.numberOfRows ?? 0) == 4 }, "\(theme) didn't load")
+            let table = try XCTUnwrap(findView(FileTable.self, in: window?.contentView))
+            XCTAssertEqual(table.backgroundColor, palette.background, "\(theme): list background")
+            if mode == .list {
+                let header = try XCTUnwrap(table.tableColumns.first?.headerCell as? ThemedHeaderCell)
+                XCTAssertEqual(header.palette, palette)
+                // Select a row so the screenshot shows the theme's selection colors.
+                table.selectRowIndexes([1], byExtendingSelection: false)
+            } else {
+                table.selectRowIndexes([0], byExtendingSelection: false)
+            }
+            wait(timeout: 1.5) { false }
+            let nameCell = try XCTUnwrap(table.view(atColumn: 0, row: 2, makeIfNecessary: true) as? NSTableCellView)
+            XCTAssertEqual(nameCell.textField?.textColor, palette.text, "\(theme): name color")
+            XCTAssertEqual(NSApp.appearance?.name, palette.isDark ? .darkAqua : .aqua)
+            XCTAssertEqual(window?.backgroundColor, palette.bar, "\(theme): window/toolbar color")
+            snapshot("theme-\(theme.rawValue)-\(mode.rawValue)")
+        }
+    }
+
+    // MARK: - Fixes from the UX review
+
+    @MainActor
+    func testScreenshotsDoNotAcceptNewItems() {
+        // New Folder / paste / drop in Screenshots used to land on the Desktop, invisible here.
+        let model = BrowserModel(clipboard: ClipboardController(), start: .screenshots)
+        XCTAssertFalse(model.acceptsNewItems)
+        XCTAssertFalse(model.canPaste)
+    }
+
+    @MainActor
+    func testSecondOperationIsQueuedInsteadOfIgnored() throws {
+        let model = BrowserModel(clipboard: ClipboardController(), start: .folder(root))
+        XCTAssertTrue(wait { model.items.count == 4 })
+        let notes = try XCTUnwrap(model.items.first { $0.name == "notes.txt" })
+        let photo = try XCTUnwrap(model.items.first { $0.name == "photo.png" })
+
+        model.selection = [notes.url]
+        model.trashSelection(undoManager: nil)
+        model.selection = [photo.url]
+        model.trashSelection(undoManager: nil)  // starts while the first one is still running
+
+        XCTAssertTrue(wait {
+            !FileManager.default.fileExists(atPath: notes.url.path) && !FileManager.default.fileExists(atPath: photo.url.path)
+        }, "The second trash was ignored")
+        XCTAssertEqual(model.queuedCount, 0)
+    }
+
+    @MainActor
+    func testReplacingACutShowsANotice() throws {
+        let clipboard = ClipboardController()
+        clipboard.set([root.appendingPathComponent("notes.txt")], mode: .cut)
+        XCTAssertNil(clipboard.notice)
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("some text", forType: .string)
+        clipboard.refreshFromPasteboard()
+
+        XCTAssertNil(clipboard.contents)
+        XCTAssertNotNil(clipboard.notice, "The user should be told the cut was cancelled")
+    }
+
+    @MainActor
+    func testLastLocationIsRemembered() {
+        defer { UserDefaults.standard.removeObject(forKey: "lastLocation") }
+        _ = BrowserModel(clipboard: ClipboardController(), start: .folder(root))
+        XCTAssertEqual(Location.lastUsed, .folder(URL(fileURLWithPath: root.path, isDirectory: true)))
+        _ = BrowserModel(clipboard: ClipboardController(), start: .screenshots)
+        XCTAssertEqual(Location.lastUsed, .screenshots)
+    }
+
     // MARK: - Helpers
 
     /// The preview is the last pane and fills the space after the columns.

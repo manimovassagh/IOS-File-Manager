@@ -12,7 +12,12 @@ See [PLAN.md](PLAN.md) for the roadmap.
   with a preview of the selected file — switch with `⌘1` / `⌘3`
 - **Preview** panel next to the list (`⌥⌘I`) and **Quick Look** with `Space`
 - **Filter** field to narrow down the current folder as you type
-- **Themes**: Light / Dark / System, accent colors, row sizes (Settings, `⌘,`)
+- **Color themes** like in VS Code / Neovim: Dracula, Nord, Tokyo Night, Catppuccin Mocha & Latte,
+  One Dark, Gruvbox, Rosé Pine, Solarized Light, GitHub Light — or Native (Light / Dark / System
+  with an accent color). Switch any time from **View → Theme** or the gallery in Settings (`⌘,`)
+- Preview pane with a large image: drag it into another app, **Copy Image**, Show in Finder
+- Busy? A paste/trash started during another copy is **queued**, not ignored
+- Reopens where you left off
 - Back / Forward / Enclosing Folder, Go menu shortcuts, clickable path bar, live folder updates
 - **Copy / Cut / Paste** with `⌘C` / `⌘X` / `⌘V`, toolbar buttons or right-click
   - Real cut: `⌘X` then `⌘V` moves files
@@ -39,7 +44,8 @@ See [PLAN.md](PLAN.md) for the roadmap.
 | Recents / Desktop / Screenshots | `⇧⌘F` / `⇧⌘D` / `⇧⌘S` |
 | Documents / Downloads / Home / Applications | `⇧⌘O` / `⌥⌘L` / `⇧⌘H` / `⇧⌘A` |
 | Settings | `⌘,` |
-| Rename | `F2` (`Return` saves, `Esc` cancels) |
+| Rename | `⌘R` or `F2` (`Return` saves, `Esc` cancels) |
+| Cancel a cut | `Esc` |
 | New Folder | `⇧⌘N` |
 | Duplicate | `⌘D` |
 | Enclosing folder | `⌘↑` |

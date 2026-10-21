@@ -83,6 +83,9 @@ final class LocationList: ObservableObject {
 
 struct SidebarView: View {
     let location: Location
+    /// Color theme palette (`nil`: Native, system sidebar material).
+    let palette: ThemePalette?
+    let accent: Color
     let onSelect: (Location) -> Void
 
     private let favorites = SidebarItem.favorites
@@ -98,6 +101,8 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(palette == nil ? .automatic : .hidden)
+        .themeBackground(palette?.sidebar)
         .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 300)
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
             locationList.refresh()
@@ -108,8 +113,14 @@ struct SidebarView: View {
     }
 
     private func row(_ item: SidebarItem) -> some View {
-        Label(item.name, systemImage: item.systemImage)
-            .tag(item.id)
+        Label {
+            Text(item.name)
+                .foregroundStyle(palette.map { Color(nsColor: $0.text) } ?? Color.primary)
+        } icon: {
+            Image(systemName: item.systemImage)
+                .foregroundStyle(accent)
+        }
+        .tag(item.id)
     }
 
     /// Highlights the row matching the current location; selecting a row goes there.

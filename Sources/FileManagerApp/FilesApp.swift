@@ -13,7 +13,7 @@ struct FilesApp: App {
                 .frame(minWidth: 760, minHeight: 440)
         }
         .windowToolbarStyle(.unified)
-        .commands { FileCommands() }
+        .commands { FileCommands(settings: settings) }
 
         Settings {
             SettingsView(settings: settings)

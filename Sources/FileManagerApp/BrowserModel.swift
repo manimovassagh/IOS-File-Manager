@@ -55,6 +55,8 @@ final class BrowserModel: ObservableObject {
     @Published private(set) var activity: String?
     /// Item-level progress of a running copy/move.
     @Published private(set) var progress: OperationProgress?
+    /// Operations started while another was running; they run one after another.
+    @Published private(set) var queuedCount = 0
     @Published private(set) var availableCapacity: Int64?
     @Published private(set) var isLoading = false
     /// An item whose name should become editable in the list (set by Rename and New Folder).
@@ -75,9 +77,12 @@ final class BrowserModel: ObservableObject {
     private var pendingReload: DispatchWorkItem?
     private var loadGeneration = 0
     private var operationTask: Task<Void, Never>?
+    private var queuedOperations: [() -> Void] = [] {
+        didSet { queuedCount = queuedOperations.count }
+    }
     private var subscriptions: Set<AnyCancellable> = []
 
-    init(clipboard: ClipboardController, start: Location = .folder(FileManager.default.homeDirectoryForCurrentUser)) {
+    init(clipboard: ClipboardController, start: Location = Location.lastUsed) {
         self.clipboard = clipboard
         location = start
         baseURL = start.baseURL
@@ -126,7 +131,14 @@ final class BrowserModel: ObservableObject {
     var canGoUp: Bool { location.kind == .folder && currentURL.standardizedFileURL.path != "/" }
     var selectedItems: [FileItem] { items.filter { selection.contains($0.url) } }
     var acceptsNewItems: Bool { location.acceptsNewItems || !isAtBase }
-    var canPaste: Bool { clipboard.contents != nil && !isBusy && acceptsNewItems }
+    /// Paste is allowed while another copy runs: it's queued and runs afterwards.
+    var canPaste: Bool { clipboard.contents != nil && acceptsNewItems }
+
+    /// Total size of the selected files (folders don't count); `nil` if no files are selected.
+    var selectedSize: Int64? {
+        let sizes = selectedItems.compactMap(\.size)
+        return sizes.isEmpty ? nil : sizes.reduce(0, +)
+    }
     var isBusy: Bool { activity != nil }
 
     /// Sort with the "folders on top" preference applied.
@@ -228,6 +240,7 @@ final class BrowserModel: ObservableObject {
             sort = sorts[newLocation.kind] ?? newLocation.kind.defaultSort
         }
         location = newLocation
+        newLocation.remember()
         showInspector = inspectorPreference[newLocation.kind] ?? false
         baseURL = newLocation.baseURL
         currentURL = baseURL
@@ -378,7 +391,13 @@ final class BrowserModel: ObservableObject {
         undoManager: UndoManager?,
         onSuccess: @escaping () -> Void = {}
     ) {
-        guard !urls.isEmpty, !isBusy else { return }
+        guard !urls.isEmpty else { return }
+        guard !isBusy else {
+            enqueue { [weak self] in
+                self?.transfer(urls, into: destination, mode: mode, actionName: actionName, undoManager: undoManager, onSuccess: onSuccess)
+            }
+            return
+        }
         let count = urls.count
         activity = "\(mode == .cut ? "Moving" : "Copying") \(count) \(count == 1 ? "item" : "items")"
         progress = OperationProgress(completed: 0, total: count, currentName: "")
@@ -389,6 +408,7 @@ final class BrowserModel: ObservableObject {
                 activity = nil
                 progress = nil
                 operationTask = nil
+                runNextQueuedOperation()
             }
             do {
                 let result = try await operations.paste(
@@ -414,6 +434,17 @@ final class BrowserModel: ObservableObject {
 
     private func updateProgress(_ newProgress: OperationProgress) {
         progress = newProgress
+    }
+
+    /// Runs `operation` after the current copy/move/trash finishes, instead of ignoring it.
+    private func enqueue(_ operation: @escaping () -> Void) {
+        queuedOperations.append(operation)
+    }
+
+    private func runNextQueuedOperation() {
+        guard !queuedOperations.isEmpty else { return }
+        let next = queuedOperations.removeFirst()
+        DispatchQueue.main.async(execute: next)
     }
 
     // MARK: - New folder & rename
@@ -457,12 +488,22 @@ final class BrowserModel: ObservableObject {
     // MARK: - Trash & delete
 
     func trashSelection(undoManager: UndoManager?) {
-        let urls = selectedItems.map(\.url)
-        guard !urls.isEmpty, !isBusy else { return }
+        trash(selectedItems.map(\.url), undoManager: undoManager)
+    }
+
+    private func trash(_ urls: [URL], undoManager: UndoManager?) {
+        guard !urls.isEmpty else { return }
+        guard !isBusy else {
+            enqueue { [weak self] in self?.trash(urls, undoManager: undoManager) }
+            return
+        }
         activity = "Moving \(urls.count) \(urls.count == 1 ? "item" : "items") to the Trash"
 
         Task {
-            defer { activity = nil }
+            defer {
+                activity = nil
+                runNextQueuedOperation()
+            }
             let result = await operations.moveToTrash(urls)
             registerUndo(result.record, actionName: "Move to Trash", undoManager: undoManager)
             report(result.failures, verb: "moved to the Trash")
@@ -473,7 +514,7 @@ final class BrowserModel: ObservableObject {
     /// Permanently deletes the selection after asking for confirmation.
     func deleteSelectionImmediately() {
         let urls = selectedItems.map(\.url)
-        guard !urls.isEmpty, !isBusy else { return }
+        guard !urls.isEmpty else { return }
 
         let alert = NSAlert()
         alert.alertStyle = .critical
@@ -485,10 +526,20 @@ final class BrowserModel: ObservableObject {
         alert.addButton(withTitle: "Cancel")
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        delete(urls)
+    }
 
+    private func delete(_ urls: [URL]) {
+        guard !isBusy else {
+            enqueue { [weak self] in self?.delete(urls) }
+            return
+        }
         activity = "Deleting \(urls.count) \(urls.count == 1 ? "item" : "items")"
         Task {
-            defer { activity = nil }
+            defer {
+                activity = nil
+                runNextQueuedOperation()
+            }
             let result = await operations.deleteImmediately(urls)
             report(result.failures, verb: "deleted")
             reload()
@@ -496,6 +547,14 @@ final class BrowserModel: ObservableObject {
     }
 
     // MARK: - Finder integration
+
+    /// Copies the selected image itself (not the file), e.g. to paste into a chat or document.
+    func copyImageOfSelection() {
+        guard let item = selectedItems.first, let image = NSImage(contentsOf: item.url) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([image])
+        clipboard.refreshFromPasteboard()
+    }
 
     func revealSelectionInFinder() {
         NSWorkspace.shared.activateFileViewerSelecting(selectedItems.map(\.url))

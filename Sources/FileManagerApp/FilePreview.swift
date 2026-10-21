@@ -9,6 +9,7 @@ import SwiftUI
 struct FilePreview: View {
     let item: FileItem
     @StateObject private var loader = PreviewLoader()
+    @ObservedObject private var settings = ThemeSettings.shared
 
     var body: some View {
         GeometryReader { geometry in
@@ -16,6 +17,8 @@ struct FilePreview: View {
                 content(imageHeight: Self.imageHeight(for: geometry.size))
             }
         }
+        .themeBackground(settings.palette?.background)
+        .themeForeground(settings.palette?.text)
         .task(id: item.url) {
             await loader.load(item.url)
         }
@@ -54,21 +57,61 @@ struct FilePreview: View {
                 }
                 .padding(12)
                 .frame(maxWidth: 460)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+                .background(cardBackground, in: RoundedRectangle(cornerRadius: 10))
             }
 
-            Button("Open") {
-                NSWorkspace.shared.open(item.url)
+            HStack(spacing: 10) {
+                Button("Open") {
+                    NSWorkspace.shared.open(item.url)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                if ThumbnailCache.isImage(item.url) {
+                    Button {
+                        copyImage()
+                    } label: {
+                        Label("Copy Image", systemImage: "photo.on.rectangle")
+                    }
+                    .controlSize(.large)
+                    .help("Copy the picture itself, to paste into a chat, email or document")
+                }
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
         }
         .frame(maxWidth: .infinity)
         .padding(18)
     }
 
+    private var cardBackground: AnyShapeStyle {
+        if let palette = settings.palette {
+            return AnyShapeStyle(Color(nsColor: palette.card))
+        }
+        return AnyShapeStyle(.quaternary.opacity(0.5))
+    }
+
+    private func copyImage() {
+        guard let image = NSImage(contentsOf: item.url) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([image])
+    }
+
+    /// The preview image; drag it into another app (chat, browser, email) to share the file.
     @ViewBuilder
     private var thumbnail: some View {
+        thumbnailImage
+            .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider() }
+            .help("Drag into another app to share this file")
+    }
+
+    @ViewBuilder
+    private var thumbnailImage: some View {
         if let image = loader.thumbnail {
             Image(nsImage: image)
                 .resizable()

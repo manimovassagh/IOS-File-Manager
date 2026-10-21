@@ -38,8 +38,35 @@ enum Location: Hashable {
         }
     }
 
-    /// Whether files can be pasted, dropped or created here.
-    var acceptsNewItems: Bool { kind != .recents }
+    /// Whether files can be pasted, dropped or created here. Not in smart locations: Recents isn't
+    /// a folder, and Screenshots only shows screenshots, so anything else put there would vanish.
+    var acceptsNewItems: Bool { kind == .folder }
+
+    private static let lastUsedKey = "lastLocation"
+
+    /// Where the previous session left off (Home the first time).
+    static var lastUsed: Location {
+        let home = Location.folder(FileManager.default.homeDirectoryForCurrentUser)
+        guard let saved = UserDefaults.standard.string(forKey: lastUsedKey) else { return home }
+        switch saved {
+        case "recents": return .recents
+        case "screenshots": return .screenshots
+        default:
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: saved, isDirectory: &isDirectory), isDirectory.boolValue else { return home }
+            return .folder(URL(fileURLWithPath: saved, isDirectory: true))
+        }
+    }
+
+    func remember() {
+        let value: String
+        switch self {
+        case .folder(let url): value = url.path
+        case .recents: value = "recents"
+        case .screenshots: value = "screenshots"
+        }
+        UserDefaults.standard.set(value, forKey: Self.lastUsedKey)
+    }
 
     var smartTitle: String? {
         switch self {
