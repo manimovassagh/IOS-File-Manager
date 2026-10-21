@@ -50,13 +50,15 @@ final class BrowserEndToEndTests: XCTestCase {
         XCTAssertEqual(rootColumn.list.tableView.numberOfRows, 4)
         XCTAssertGreaterThan(rootColumn.list.tableView.visibleRect.height, 100)
         XCTAssertGreaterThan(rootColumn.list.tableView.rect(ofRow: 0).width, 100, "Rows are too narrow to show names")
+        assertFirstRowVisible(rootColumn.list.tableView)
         snapshot("columns-1-root")
 
         // Selecting a folder opens it in the next column.
         let folderRow = try XCTUnwrap(rootColumn.list.items.firstIndex { $0.name == "Documents" })
         rootColumn.list.tableView.selectRowIndexes([folderRow], byExtendingSelection: false)
         XCTAssertTrue(wait(pump) { controller.columns.count == 2 && controller.columns[1].list.items.count == 1 })
-        let second = controller.columns[1]
+        let second = try XCTUnwrap(controller.columns.dropFirst().first, "Selecting a folder didn't open a column")
+        assertFirstRowVisible(second.list.tableView)
         XCTAssertEqual(second.list.items.first?.name, "inner.txt")
         XCTAssertEqual(second.container.frame.minX, ColumnBrowserController.columnWidth)
         XCTAssertEqual(model.selection.map(\.lastPathComponent), ["Documents"])
@@ -90,6 +92,7 @@ final class BrowserEndToEndTests: XCTestCase {
         XCTAssertEqual(coordinator.list.tableView.numberOfRows, 4)
         XCTAssertEqual(coordinator.list.items.first?.name, "Documents", "Folders should be listed first")
         XCTAssertEqual(coordinator.list.tableView.numberOfColumns, 4)
+        assertFirstRowVisible(coordinator.list.tableView)
         snapshot("list-1-folder")
 
         // Selecting in the table updates the model (what copy/cut act on).
@@ -149,6 +152,15 @@ final class BrowserEndToEndTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    @MainActor
+    private func assertFirstRowVisible(_ table: NSTableView, file: StaticString = #filePath, line: UInt = #line) {
+        let firstRow = table.rect(ofRow: 0)
+        XCTAssertTrue(
+            table.visibleRect.contains(firstRow),
+            "First row \(firstRow) is outside the visible area \(table.visibleRect)", file: file, line: line
+        )
+    }
 
     @MainActor
     private func show(_ view: NSView) {

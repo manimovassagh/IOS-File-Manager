@@ -30,6 +30,8 @@ final class ColumnsHostView: NSView {
     let scrollView = NSScrollView()
     private let documentView = FlippedView()
     private(set) var panes: [(view: NSView, width: CGFloat)] = []
+    /// Panes that have had their first real layout (and were scrolled to the top then).
+    private var laidOutPanes: Set<ObjectIdentifier> = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -58,6 +60,7 @@ final class ColumnsHostView: NSView {
             documentView.addSubview(pane.view)
         }
         panes = newPanes
+        laidOutPanes.formIntersection(newViews)
         needsLayout = true
         layoutSubtreeIfNeeded()
     }
@@ -72,6 +75,36 @@ final class ColumnsHostView: NSView {
             x += pane.width
         }
         documentView.frame = NSRect(x: 0, y: 0, width: max(x, scrollView.contentSize.width), height: height)
+        for pane in panes {
+            pane.view.layoutSubtreeIfNeeded()
+            let scrollViews = pane.view.subviews.compactMap { $0 as? NSScrollView }
+            if height > 1, laidOutPanes.insert(ObjectIdentifier(pane.view)).inserted {
+                // A new column starts at its first row (unless a selected row needs to be shown).
+                scrollViews.forEach(Self.scrollToTop)
+            }
+            scrollViews.forEach(Self.keepScrollPositionInRange)
+        }
+    }
+
+    static func scrollToTop(_ scrollView: NSScrollView) {
+        if let table = scrollView.documentView as? NSTableView, let selected = table.selectedRowIndexes.first {
+            table.scrollRowToVisible(selected)
+            return
+        }
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    /// After a column grows, AppKit can leave it scrolled past its content, hiding the first rows
+    /// above the top edge (with a short folder the column then looks empty). Pull it back in range.
+    static func keepScrollPositionInRange(_ scrollView: NSScrollView) {
+        guard let document = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let maxY = max(0, document.frame.height - clip.bounds.height)
+        let y = clip.bounds.origin.y
+        guard y < 0 || y > maxY else { return }
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: min(max(y, 0), maxY)))
+        scrollView.reflectScrolledClipView(clip)
     }
 
     func scrollToEnd() {

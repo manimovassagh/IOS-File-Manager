@@ -237,7 +237,7 @@ final class BrowserModel: ObservableObject {
         filterText = ""
         navigationID += 1
         watch(currentURL)
-        reload(selecting: paths)
+        reload(selecting: paths.isEmpty ? nil : paths)
     }
 
     /// Column view: the user moved focus to the column showing `folder`.
@@ -273,7 +273,6 @@ final class BrowserModel: ObservableObject {
         let generation = loadGeneration
         let source = itemSource(for: currentURL)
         let includeHidden = showHidden
-        let keep = paths ?? Set(selection.map(\.path))
         isLoading = true
 
         Task {
@@ -288,6 +287,8 @@ final class BrowserModel: ObservableObject {
 
             switch result {
             case .success(let loaded):
+                // Use the selection as it is now: the user may have clicked something while this loaded.
+                let keep = paths ?? Set(selection.map(\.path))
                 allItems = loaded
                 applyFilterAndSort()
                 selection = Set(items.filter { keep.contains($0.url.path) }.map(\.url))
