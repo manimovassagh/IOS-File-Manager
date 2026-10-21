@@ -41,12 +41,27 @@ struct SidebarLocation: Identifiable, Hashable {
     }
 }
 
+/// Mounted volumes, refreshed when a disk is mounted or ejected.
+///
+/// An `ObservableObject` rather than `@State`: in newer SDKs `@State` is a macro whose plugin
+/// ships only with Xcode, and this project must also build with the Command Line Tools alone.
+@MainActor
+final class VolumeList: ObservableObject {
+    @Published private(set) var volumes = SidebarLocation.volumes
+
+    func refresh() {
+        volumes = SidebarLocation.volumes
+    }
+}
+
 struct SidebarView: View {
     let currentURL: URL
     let onSelect: (URL) -> Void
 
     private let favorites = SidebarLocation.favorites
-    @State private var volumes = SidebarLocation.volumes
+    @StateObject private var volumeList = VolumeList()
+
+    private var volumes: [SidebarLocation] { volumeList.volumes }
 
     var body: some View {
         List(selection: selection) {
@@ -60,10 +75,10 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 150, ideal: 190, max: 300)
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
-            volumes = SidebarLocation.volumes
+            volumeList.refresh()
         }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)) { _ in
-            volumes = SidebarLocation.volumes
+            volumeList.refresh()
         }
     }
 

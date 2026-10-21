@@ -40,7 +40,7 @@ See [PLAN.md](PLAN.md) for the roadmap.
 
 ## Requirements
 - macOS 14 (Sonoma) or later
-- Xcode 16 or later (or the Swift 6 command line tools)
+- Xcode 16 or later, **or** just the Command Line Tools (`xcode-select --install`)
 
 ## Run
 **From Xcode:** open `Package.swift` in Xcode, choose the `FileManagerApp` scheme, press `⌘R`.

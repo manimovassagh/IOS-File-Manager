@@ -12,4 +12,7 @@ Top priority: easy, reliable copy / cut / paste of files.
 ## Build & test
 - Swift package: `FileCore` (logic, no UI) + `FileManagerApp` (SwiftUI + AppKit executable).
 - `swift build`, `swift test`, `./scripts/build-app.sh` — macOS only.
-- Cloud sessions have no Swift toolchain; verify changes through the GitHub Actions CI (`.github/workflows/ci.yml`, macOS runner).
+- Cloud sessions have no Swift toolchain; verify changes through the GitHub Actions CI (`.github/workflows/ci.yml`, macOS runners).
+- The app must build with the **Command Line Tools only** (no Xcode). Don't use SwiftUI macros —
+  `@State`, `@Entry`, `@Previewable`, `#Preview` — their plugin ships only with Xcode. Use
+  `ObservableObject` + `@StateObject` / `@Published` instead. CI has a job that checks this.

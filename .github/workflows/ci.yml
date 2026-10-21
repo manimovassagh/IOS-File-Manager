@@ -6,12 +6,19 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15: Xcode 16 / Swift 6.1. macos-26: newest Xcode, matching current Macs.
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Swift version
-        run: swift --version
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: Build
         run: swift build
@@ -27,5 +34,21 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: File-Manager-app
+          name: File-Manager-app-${{ matrix.runner }}
           path: build/File-Manager.zip
+
+  # Many Macs have only the Command Line Tools (no Xcode app). They lack Xcode-only pieces such as
+  # the SwiftUI macro plugin, so make sure the app still builds there.
+  command-line-tools:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Switch to the Command Line Tools
+        run: |
+          sudo xcode-select --switch /Library/Developer/CommandLineTools
+          xcode-select --print-path
+          swift --version
+
+      - name: Build app bundle
+        run: ./scripts/build-app.sh
