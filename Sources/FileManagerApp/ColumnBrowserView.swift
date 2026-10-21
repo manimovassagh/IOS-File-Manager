@@ -117,12 +117,53 @@ final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
+/// One column's view: the file list filling it, with a 1 pt separator on the right.
+///
+/// Lays out its subviews explicitly. AppKit's autoresizing, starting from a small initial frame,
+/// stretched the list to double width and pushed its first rows above the visible area.
+final class ColumnContainerView: NSView {
+    let content: NSView
+    private let separator = NSBox()
+
+    init(content: NSView) {
+        self.content = content
+        super.init(frame: NSRect(x: 0, y: 0, width: ColumnBrowserController.columnWidth, height: 400))
+        autoresizesSubviews = false
+        content.autoresizingMask = []
+        separator.boxType = .separator
+        addSubview(content)
+        addSubview(separator)
+        layoutContent()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        layoutContent()
+    }
+
+    override func layout() {
+        super.layout()
+        layoutContent()
+    }
+
+    private func layoutContent() {
+        let width = max(bounds.width - 1, 0)
+        content.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height)
+        separator.frame = NSRect(x: width, y: 0, width: 1, height: bounds.height)
+    }
+}
+
 /// One column: a file list with its own items and folder watcher.
 @MainActor
 final class BrowserColumn {
     let list: FileListController
     let source: ItemSource
-    let container = NSView()
+    let container: ColumnContainerView
     var allItems: [FileItem] = []
     var watcher: DirectoryWatcher?
     var generation = 0
@@ -130,16 +171,7 @@ final class BrowserColumn {
     init(list: FileListController, source: ItemSource) {
         self.list = list
         self.source = source
-
-        // Frame-based: the list fills the column, with a 1 pt separator on the right.
-        list.scrollView.frame = NSRect(x: 0, y: 0, width: ColumnBrowserController.columnWidth - 1, height: 100)
-        list.scrollView.autoresizingMask = [.width, .height]
-        container.addSubview(list.scrollView)
-        let separator = NSBox(frame: NSRect(x: ColumnBrowserController.columnWidth - 1, y: 0, width: 1, height: 100))
-        separator.boxType = .separator
-        separator.autoresizingMask = [.minXMargin, .height]
-        container.addSubview(separator)
-        container.frame = NSRect(x: 0, y: 0, width: ColumnBrowserController.columnWidth, height: 100)
+        container = ColumnContainerView(content: list.scrollView)
     }
 
     var folder: URL { list.folder }

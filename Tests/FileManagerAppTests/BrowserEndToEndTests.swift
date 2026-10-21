@@ -46,6 +46,7 @@ final class BrowserEndToEndTests: XCTestCase {
         XCTAssertTrue(wait(pump) { controller.columns.first?.list.items.count == 4 }, "Root column didn't load")
         let rootColumn = try XCTUnwrap(controller.columns.first)
         XCTAssertEqual(rootColumn.container.frame.width, ColumnBrowserController.columnWidth)
+        XCTAssertEqual(rootColumn.list.scrollView.frame.width, ColumnBrowserController.columnWidth - 1)
         XCTAssertGreaterThan(rootColumn.container.frame.height, 100, "Column has no height, so nothing would be visible")
         XCTAssertEqual(rootColumn.list.tableView.numberOfRows, 4)
         XCTAssertGreaterThan(rootColumn.list.tableView.visibleRect.height, 100)
@@ -144,6 +145,11 @@ final class BrowserEndToEndTests: XCTestCase {
                 XCTAssertGreaterThan(host.frame.height, 100)
                 XCTAssertFalse(host.panes.isEmpty, "Column view shows no columns")
                 XCTAssertGreaterThan(host.panes.first?.view.frame.height ?? 0, 100)
+                let rootColumn = try XCTUnwrap(host.panes.first?.view as? ColumnContainerView)
+                XCTAssertEqual(rootColumn.frame.width, ColumnBrowserController.columnWidth)
+                let table = try XCTUnwrap((rootColumn.content as? NSScrollView)?.documentView as? NSTableView)
+                XCTAssertTrue(wait { table.numberOfRows > 0 })
+                assertFirstRowVisible(table)
             }
             snapshot("window-\(mode.rawValue)")
             window?.close()
@@ -153,13 +159,27 @@ final class BrowserEndToEndTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// Checks the first row is really on screen: inside the table's visible area *and*, in window
+    /// coordinates, inside the visible part of every enclosing view (a misplaced scroll view can
+    /// keep the row "visible" in its own coordinates while the window shows something else).
     @MainActor
     private func assertFirstRowVisible(_ table: NSTableView, file: StaticString = #filePath, line: UInt = #line) {
         let firstRow = table.rect(ofRow: 0)
         XCTAssertTrue(
             table.visibleRect.contains(firstRow),
-            "First row \(firstRow) is outside the visible area \(table.visibleRect)", file: file, line: line
+            "First row \(firstRow) is outside the table's visible area \(table.visibleRect)", file: file, line: line
         )
+        let rowInWindow = table.convert(firstRow, to: nil)
+        var ancestor = table.superview
+        while let view = ancestor {
+            let visibleInWindow = view.convert(view.visibleRect, to: nil)
+            XCTAssertTrue(
+                visibleInWindow.insetBy(dx: -1, dy: -1).contains(rowInWindow),
+                "First row \(rowInWindow) is cut off by \(type(of: view)) showing \(visibleInWindow)",
+                file: file, line: line
+            )
+            ancestor = view.superview
+        }
     }
 
     @MainActor
