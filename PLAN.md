@@ -96,10 +96,14 @@ Principles:
 ### Phase 3 — Better than Finder (2–3 weeks)
 - [ ] **Dual pane mode** with `F5`/`F6` to copy/move between panes — top priority of this phase
 - [ ] **Tabs**
-- [ ] **Icon view** and **Column view**
-- [ ] **Quick Look** with Space, plus an Inspector panel
+- [ ] **Icon view**
+- [x] **Column view** with a preview pane
+- [x] **Quick Look** with Space, plus a preview (inspector) panel
 - [ ] **Folder size calculation** in List view
-- [ ] **Fast search** (instant in-folder filter + Spotlight search)
+- [x] Instant in-folder filter
+- [ ] Spotlight search across the disk
+- [x] Sidebar: Recents, Screenshots, Pictures, iCloud Drive; Finder-style Go menu shortcuts
+- [x] App icon, themes (appearance, accent colors, row sizes) in Settings
 - [ ] **Command Palette** (`⌘K`) for all commands
 - [ ] **Batch rename** (patterns, numbering, regex)
 - [ ] Customizable keyboard shortcuts, full keyboard navigation (optionally Vim-style)
