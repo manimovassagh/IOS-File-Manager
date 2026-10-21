@@ -211,6 +211,174 @@ final class FileOperationsTests: XCTestCase {
         XCTAssertEqual(read("file.txt"), "content")
     }
 
+    // MARK: - Redo (undoing the inverse record)
+
+    func testRedoCopy() async throws {
+        let source = try makeFile("a/file.txt")
+        let result = try await operations.paste([source], into: try makeDirectory("b"), mode: .copy, onConflict: Self.noConflictExpected)
+
+        let inverse = try await operations.undo(result.record)
+        XCTAssertFalse(exists("b/file.txt"))
+
+        try await operations.undo(inverse)
+        XCTAssertEqual(read("b/file.txt"), "content")
+    }
+
+    func testUndoRedoUndoMove() async throws {
+        let source = try makeFile("a/file.txt")
+        let result = try await operations.paste([source], into: try makeDirectory("b"), mode: .cut, onConflict: Self.noConflictExpected)
+
+        let inverse = try await operations.undo(result.record)
+        XCTAssertTrue(exists("a/file.txt"))
+        let again = try await operations.undo(inverse)
+        XCTAssertTrue(exists("b/file.txt"))
+        XCTAssertFalse(exists("a/file.txt"))
+        try await operations.undo(again)
+        XCTAssertTrue(exists("a/file.txt"))
+        XCTAssertFalse(exists("b/file.txt"))
+    }
+
+    func testRedoReplaceRestoresNewVersion() async throws {
+        let source = try makeFile("a/file.txt", contents: "new")
+        try makeFile("b/file.txt", contents: "old")
+        let result = try await operations.paste([source], into: url("b"), mode: .cut, onConflict: Self.always(.replace))
+
+        let inverse = try await operations.undo(result.record)
+        XCTAssertEqual(read("b/file.txt"), "old")
+
+        try await operations.undo(inverse)
+        XCTAssertEqual(read("b/file.txt"), "new")
+        XCTAssertFalse(exists("a/file.txt"))
+    }
+
+    func testRedoTrash() async throws {
+        let file = try makeFile("file.txt")
+        let result = await operations.moveToTrash([file])
+
+        let inverse = try await operations.undo(result.record)
+        XCTAssertTrue(exists("file.txt"))
+        try await operations.undo(inverse)
+        XCTAssertFalse(exists("file.txt"))
+    }
+
+    // MARK: - Progress & cancellation
+
+    func testProgressIsReportedPerItem() async throws {
+        let sources = try (1...3).map { try makeFile("a/\($0).txt") }
+        let recorder = ProgressRecorder()
+
+        _ = try await operations.paste(
+            sources, into: try makeDirectory("b"), mode: .copy,
+            onConflict: Self.noConflictExpected,
+            onProgress: { await recorder.append($0) }
+        )
+
+        let completed = await recorder.values.map(\.completed)
+        XCTAssertEqual(completed, [0, 1, 2, 3])
+    }
+
+    func testCancellationStopsBeforeNextItem() async throws {
+        let sources = try (1...3).map { try makeFile("a/\($0).txt") }
+
+        let result = try await operations.paste(
+            sources, into: try makeDirectory("b"), mode: .copy,
+            onConflict: Self.noConflictExpected,
+            onProgress: { progress in
+                if progress.completed == 1 {
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
+            }
+        )
+
+        XCTAssertTrue(result.stopped)
+        XCTAssertTrue(exists("b/1.txt"))
+        XCTAssertFalse(exists("b/2.txt"))
+        XCTAssertFalse(exists("b/3.txt"))
+    }
+
+    // MARK: - Rename
+
+    func testRenameAndUndo() async throws {
+        let file = try makeFile("old.txt")
+
+        let (newURL, record) = try await operations.rename(file, to: "new.txt")
+        XCTAssertEqual(newURL.lastPathComponent, "new.txt")
+        XCTAssertFalse(exists("old.txt"))
+        XCTAssertEqual(read("new.txt"), "content")
+
+        try await operations.undo(record)
+        XCTAssertTrue(exists("old.txt"))
+        XCTAssertFalse(exists("new.txt"))
+    }
+
+    func testRenameCaseOnly() async throws {
+        let file = try makeFile("readme.txt")
+
+        let (newURL, _) = try await operations.rename(file, to: "README.txt")
+
+        XCTAssertEqual(newURL.lastPathComponent, "README.txt")
+        let names = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        XCTAssertEqual(names, ["README.txt"])
+    }
+
+    func testRenameToTakenNameFails() async throws {
+        let file = try makeFile("a.txt", contents: "a")
+        try makeFile("b.txt", contents: "b")
+
+        do {
+            _ = try await operations.rename(file, to: "b.txt")
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error as? FileOperationError, .nameTaken("b.txt"))
+        }
+        XCTAssertEqual(read("a.txt"), "a")
+        XCTAssertEqual(read("b.txt"), "b")
+    }
+
+    func testRenameRejectsInvalidNames() async throws {
+        let file = try makeFile("a.txt")
+        for name in ["", "x/y", "x:y", ".."] {
+            do {
+                _ = try await operations.rename(file, to: name)
+                XCTFail("Expected an error for \(name)")
+            } catch {
+                XCTAssertEqual(error as? FileOperationError, .invalidName(name))
+            }
+        }
+        XCTAssertTrue(exists("a.txt"))
+    }
+
+    // MARK: - New folder & delete
+
+    func testCreateFolderUsesNumberedNamesAndUndo() async throws {
+        let (first, _) = try await operations.createFolder(in: root)
+        let (second, record) = try await operations.createFolder(in: root)
+
+        XCTAssertEqual(first.lastPathComponent, "untitled folder")
+        XCTAssertEqual(second.lastPathComponent, "untitled folder 2")
+
+        try await operations.undo(record)
+        XCTAssertTrue(exists("untitled folder"))
+        XCTAssertFalse(exists("untitled folder 2"))
+    }
+
+    func testDeleteImmediately() async throws {
+        let file = try makeFile("file.txt")
+        try makeFile("folder/inner.txt")
+
+        let result = await operations.deleteImmediately([file, url("folder")])
+
+        XCTAssertTrue(result.failures.isEmpty)
+        XCTAssertTrue(result.record.isEmpty)
+        XCTAssertFalse(exists("file.txt"))
+        XCTAssertFalse(exists("folder"))
+    }
+
+    func testSameVolume() throws {
+        let file = try makeFile("a/file.txt")
+        XCTAssertTrue(FileOperations.isOnSameVolume(file, root))
+    }
+
     // MARK: - Naming
 
     func testNumberedNameContinuesExistingNumber() throws {
@@ -223,5 +391,13 @@ final class FileOperationsTests: XCTestCase {
         try makeDirectory("Folder")
         XCTAssertEqual(FileOperations.uniqueURL(for: "Folder", in: root, style: .numbered).lastPathComponent, "Folder 2")
         XCTAssertEqual(FileOperations.uniqueURL(for: "Folder", in: root, style: .copy).lastPathComponent, "Folder copy")
+    }
+}
+
+private actor ProgressRecorder {
+    private(set) var values: [OperationProgress] = []
+
+    func append(_ progress: OperationProgress) {
+        values.append(progress)
     }
 }

@@ -43,6 +43,10 @@ struct FileTableView: NSViewRepresentable {
         tableView.target = coordinator
         tableView.doubleAction = #selector(Coordinator.doubleClicked(_:))
 
+        tableView.registerForDraggedTypes([.fileURL])
+        tableView.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
+        tableView.setDraggingSourceOperationMask([.copy, .move], forLocal: false)
+
         let menu = NSMenu()
         menu.delegate = coordinator
         menu.autoenablesItems = false
@@ -67,12 +71,13 @@ struct FileTableView: NSViewRepresentable {
             selection: model.selection,
             cutPaths: cutPaths
         )
+        context.coordinator.handleRenameRequest(model.renameRequest)
     }
 
     // MARK: - Coordinator
 
     @MainActor
-    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, FileTableActions {
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate, NSTextFieldDelegate, FileTableActions {
         var model: BrowserModel
         weak var tableView: FileTable?
 
@@ -81,6 +86,9 @@ struct FileTableView: NSViewRepresentable {
         private var folder: URL?
         /// True while we change the table ourselves, so delegate callbacks don't write back into the model.
         private var isUpdating = false
+        /// The item whose name is being edited, if any.
+        private var renamingItem: FileItem?
+        private var scheduledRename: URL?
 
         private static let byteFormatter: ByteCountFormatter = {
             let formatter = ByteCountFormatter()
@@ -100,7 +108,7 @@ struct FileTableView: NSViewRepresentable {
             let folderChanged = newFolder != folder
             folder = newFolder
 
-            if newItems != items || newCutPaths != cutPaths {
+            if (newItems != items || newCutPaths != cutPaths) && renamingItem == nil {
                 items = newItems
                 cutPaths = newCutPaths
                 tableView.reloadData()
@@ -145,6 +153,8 @@ struct FileTableView: NSViewRepresentable {
             switch column {
             case .name:
                 cell.textField?.stringValue = item.name
+                cell.textField?.isEditable = false
+                cell.textField?.delegate = self
                 cell.imageView?.image = NSWorkspace.shared.icon(forFile: item.url.path)
             case .dateModified:
                 cell.textField?.stringValue = item.dateModified?.formatted(date: .abbreviated, time: .shortened) ?? "--"
@@ -194,10 +204,162 @@ struct FileTableView: NSViewRepresentable {
         }
 
         func openSelection() { model.open(model.selectedItems) }
+        func renameSelection() { model.renameSelection() }
         func copySelection() { model.copySelection() }
         func cutSelection() { model.cutSelection() }
         func pasteHere() { model.paste(undoManager: tableView?.undoManager) }
         func trashSelection() { model.trashSelection(undoManager: tableView?.undoManager) }
+
+        // MARK: Rename
+
+        /// Starts editing once the requested item is in the list (a new folder may still be loading).
+        func handleRenameRequest(_ url: URL?) {
+            guard let url, scheduledRename != url,
+                  items.contains(where: { $0.url.path == url.path })
+            else { return }
+            scheduledRename = url
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.scheduledRename = nil
+                self.model.renameRequest = nil
+                self.beginRename(url)
+            }
+        }
+
+        private func beginRename(_ url: URL) {
+            guard let tableView,
+                  let row = items.firstIndex(where: { $0.url.path == url.path })
+            else { return }
+            let column = tableView.column(withIdentifier: FileColumn.name.identifier)
+            guard column >= 0 else { return }
+
+            tableView.selectRowIndexes([row], byExtendingSelection: false)
+            tableView.scrollRowToVisible(row)
+            guard let cell = tableView.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTableCellView,
+                  let field = cell.textField
+            else { return }
+
+            let item = items[row]
+            renamingItem = item
+            field.isEditable = true
+            field.delegate = self
+            tableView.window?.makeFirstResponder(field)
+            // Select the name without its extension, like Finder.
+            let base = item.isBrowsable ? item.name : (item.name as NSString).deletingPathExtension
+            field.currentEditor()?.selectedRange = NSRange(location: 0, length: (base as NSString).length)
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField, let item = renamingItem else { return }
+            renamingItem = nil
+            field.isEditable = false
+            let newName = field.stringValue
+            // Show the old name until the rename succeeds and the list reloads.
+            field.stringValue = item.name
+            model.rename(item.url, to: newName, undoManager: tableView?.undoManager)
+            if let tableView {
+                tableView.window?.makeFirstResponder(tableView)
+            }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            // Escape cancels the rename.
+            guard commandSelector == #selector(NSResponder.cancelOperation(_:)),
+                  let field = control as? NSTextField, let item = renamingItem
+            else { return false }
+            renamingItem = nil
+            field.abortEditing()
+            field.stringValue = item.name
+            field.isEditable = false
+            if let tableView {
+                tableView.window?.makeFirstResponder(tableView)
+            }
+            return true
+        }
+
+        // MARK: Drag & drop
+
+        func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+            guard items.indices.contains(row) else { return nil }
+            return items[row].url as NSURL
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            validateDrop info: NSDraggingInfo,
+            proposedRow row: Int,
+            proposedDropOperation dropOperation: NSTableView.DropOperation
+        ) -> NSDragOperation {
+            let urls = Self.fileURLs(from: info)
+            guard !urls.isEmpty else { return [] }
+
+            let destination: URL
+            if let folder = dropFolder(row: row, operation: dropOperation) {
+                destination = folder
+            } else {
+                // Not onto a folder: drop into the folder being shown.
+                tableView.setDropRow(-1, dropOperation: .on)
+                destination = model.currentURL
+            }
+            guard let mode = Self.dropMode(for: info, sources: urls, destination: destination) else { return [] }
+            return mode == .cut ? .move : .copy
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            acceptDrop info: NSDraggingInfo,
+            row: Int,
+            dropOperation: NSTableView.DropOperation
+        ) -> Bool {
+            let urls = Self.fileURLs(from: info)
+            let destination = dropFolder(row: row, operation: dropOperation) ?? model.currentURL
+            guard let mode = Self.dropMode(for: info, sources: urls, destination: destination) else { return false }
+            model.drop(urls, into: destination, mode: mode, undoManager: tableView.undoManager)
+            return true
+        }
+
+        private func dropFolder(row: Int, operation: NSTableView.DropOperation) -> URL? {
+            guard operation == .on, items.indices.contains(row), items[row].isBrowsable else { return nil }
+            return items[row].browseURL
+        }
+
+        private static func fileURLs(from info: NSDraggingInfo) -> [URL] {
+            info.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]
+            ) as? [URL] ?? []
+        }
+
+        /// Like Finder: move within the same disk, copy to another disk. Hold ⌥ to force a copy, ⌘ to force a move.
+        private static func dropMode(for info: NSDraggingInfo, sources: [URL], destination: URL) -> FileClipboard.Mode? {
+            let destinationPath = destination.standardizedFileURL.pathComponents
+            for source in sources {
+                let sourcePath = source.standardizedFileURL.pathComponents
+                // Can't drop a folder into itself or one of its subfolders.
+                if destinationPath.starts(with: sourcePath) { return nil }
+            }
+
+            let mask = info.draggingSourceOperationMask
+            let mode: FileClipboard.Mode
+            if mask == .copy {
+                mode = .copy
+            } else if mask == .move {
+                mode = .cut
+            } else if mask.contains(.move) || mask.contains(.generic) {
+                mode = sources.allSatisfy { FileOperations.isOnSameVolume($0, destination) } ? .cut : .copy
+            } else if mask.contains(.copy) {
+                mode = .copy
+            } else {
+                return nil
+            }
+
+            // Moving items into the folder they're already in does nothing.
+            let alreadyThere = sources.allSatisfy {
+                $0.deletingLastPathComponent().standardizedFileURL.path == destination.standardizedFileURL.path
+            }
+            if mode == .cut && alreadyThere { return nil }
+            return mode
+        }
 
         // MARK: Context menu
 
@@ -211,24 +373,76 @@ struct FileTableView: NSViewRepresentable {
             } else if !tableView.selectedRowIndexes.contains(clickedRow) {
                 tableView.selectRowIndexes([clickedRow], byExtendingSelection: false)
             }
-            let hasSelection = clickedRow >= 0
+            let selected = model.selectedItems
 
-            if hasSelection {
-                menu.addItem(item("Open", #selector(menuOpen)))
+            if selected.isEmpty {
+                menu.addItem(item("New Folder", #selector(menuNewFolder)))
                 menu.addItem(.separator())
-                menu.addItem(item("Copy", #selector(menuCopy)))
-                menu.addItem(item("Cut", #selector(menuCut)))
+                let paste = item("Paste", #selector(menuPaste))
+                paste.isEnabled = canPaste
+                menu.addItem(paste)
+                menu.addItem(.separator())
+                menu.addItem(item("Open in Terminal", #selector(menuTerminal)))
+                return
             }
+
+            menu.addItem(item("Open", #selector(menuOpen)))
+            if let openWith = openWithMenu(for: selected) {
+                let openWithItem = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+                openWithItem.submenu = openWith
+                menu.addItem(openWithItem)
+            }
+            menu.addItem(.separator())
+            menu.addItem(item("Copy", #selector(menuCopy)))
+            menu.addItem(item("Cut", #selector(menuCut)))
             let paste = item("Paste", #selector(menuPaste))
             paste.isEnabled = canPaste
             menu.addItem(paste)
-            if hasSelection {
-                menu.addItem(.separator())
-                menu.addItem(item("Move to Trash", #selector(menuTrash)))
-                menu.addItem(.separator())
-                menu.addItem(item("Copy Path", #selector(menuCopyPath)))
-                menu.addItem(item("Show in Finder", #selector(menuReveal)))
+            menu.addItem(item("Duplicate", #selector(menuDuplicate)))
+            menu.addItem(.separator())
+            let rename = item("Rename", #selector(menuRename))
+            rename.isEnabled = selected.count == 1
+            menu.addItem(rename)
+            menu.addItem(item("Move to Trash", #selector(menuTrash)))
+            menu.addItem(item("Delete Immediately…", #selector(menuDelete)))
+            menu.addItem(.separator())
+            menu.addItem(item("Copy Path", #selector(menuCopyPath)))
+            menu.addItem(item("Show in Finder", #selector(menuReveal)))
+            if selected.count == 1, selected[0].isBrowsable {
+                menu.addItem(item("Open in Terminal", #selector(menuTerminal)))
             }
+        }
+
+        /// Apps that can open every selected file, default app first.
+        private func openWithMenu(for selected: [FileItem]) -> NSMenu? {
+            guard !selected.contains(where: \.isBrowsable), let first = selected.first else { return nil }
+            let workspace = NSWorkspace.shared
+            var apps = workspace.urlsForApplications(toOpen: first.url)
+            for item in selected.dropFirst() {
+                let paths = Set(workspace.urlsForApplications(toOpen: item.url).map(\.path))
+                apps = apps.filter { paths.contains($0.path) }
+            }
+            guard !apps.isEmpty else { return nil }
+
+            let defaultApp = workspace.urlForApplication(toOpen: first.url)
+            func name(_ url: URL) -> String { FileManager.default.displayName(atPath: url.path) }
+            apps.sort { lhs, rhs in
+                if lhs.path == defaultApp?.path { return true }
+                if rhs.path == defaultApp?.path { return false }
+                return name(lhs).localizedStandardCompare(name(rhs)) == .orderedAscending
+            }
+
+            let menu = NSMenu()
+            for app in apps {
+                let title = app.path == defaultApp?.path ? "\(name(app)) (default)" : name(app)
+                let menuItem = item(title, #selector(menuOpenWith(_:)))
+                menuItem.representedObject = app
+                let icon = workspace.icon(forFile: app.path)
+                icon.size = NSSize(width: 16, height: 16)
+                menuItem.image = icon
+                menu.addItem(menuItem)
+            }
+            return menu
         }
 
         private func item(_ title: String, _ action: Selector) -> NSMenuItem {
@@ -238,6 +452,18 @@ struct FileTableView: NSViewRepresentable {
         }
 
         @objc private func menuOpen() { openSelection() }
+        @objc private func menuOpenWith(_ sender: NSMenuItem) {
+            guard let app = sender.representedObject as? URL else { return }
+            model.open(model.selectedItems, withApplicationAt: app)
+        }
+        @objc private func menuNewFolder() { model.newFolder(undoManager: tableView?.undoManager) }
+        @objc private func menuDuplicate() { model.duplicateSelection(undoManager: tableView?.undoManager) }
+        @objc private func menuRename() { renameSelection() }
+        @objc private func menuDelete() { model.deleteSelectionImmediately() }
+        @objc private func menuTerminal() {
+            let folder = model.selectedItems.first.flatMap { $0.isBrowsable ? $0.browseURL : nil }
+            model.openTerminal(at: folder)
+        }
         @objc private func menuCopy() { copySelection() }
         @objc private func menuCut() { cutSelection() }
         @objc private func menuPaste() { pasteHere() }
@@ -289,6 +515,7 @@ protocol FileTableActions: AnyObject {
     var hasSelection: Bool { get }
     var canPaste: Bool { get }
     func openSelection()
+    func renameSelection()
     func copySelection()
     func cutSelection()
     func pasteHere()
@@ -322,8 +549,8 @@ final class FileTable: NSTableView {
             actions?.openSelection()
         } else if event.keyCode == 125 && modifiers == .command { // ⌘↓
             actions?.openSelection()
-        } else if event.keyCode == 51 && modifiers == .command { // ⌘⌫
-            actions?.trashSelection()
+        } else if event.keyCode == 120 && modifiers.isEmpty { // F2
+            actions?.renameSelection()
         } else {
             super.keyDown(with: event)
         }

@@ -3,7 +3,7 @@
 A personal Finder replacement focused on making **copy, cut and paste** of files easy.
 See [PLAN.md](PLAN.md) for the roadmap.
 
-## Features (Phase 1)
+## Features
 - Sidebar with Favorites and mounted volumes
 - Fast list view (Name, Date Modified, Size, Kind), sortable by column, folders first
 - Back / Forward / Enclosing Folder, clickable path bar, live folder updates
@@ -13,19 +13,29 @@ See [PLAN.md](PLAN.md) for the roadmap.
   - Cut items are shown dimmed until pasted
   - Name conflicts: Replace / Keep Both / Skip / Stop, with "Apply to all"
   - Works with Finder: copy in Finder and paste here, or the other way around
-- Move to Trash (`⌘⌫`), Copy Path, Show in Finder
-- Undo (`⌘Z`) for paste, move and trash
+- Drag & drop: onto a folder or the list, to and from Finder and other apps
+  (moves on the same disk, copies to another disk; hold `⌥` to copy, `⌘` to move)
+- Progress bar for multi-item copies/moves, with **Cancel**
+- New Folder (named inline right away), inline Rename (`F2`), Duplicate (`⌘D`)
+- Move to Trash (`⌘⌫`), Delete Immediately (`⌥⌘⌫`, asks first)
+- Undo (`⌘Z`) and Redo (`⇧⌘Z`) for paste, move, rename, new folder, duplicate and trash
+- Open With, Open in Terminal, Copy Path, Show in Finder
 - Show/hide hidden files (`⇧⌘.`)
 
 ## Keyboard shortcuts
 | Action | Shortcut |
 |---|---|
 | Open | `Return` or `⌘↓` / double-click |
+| Rename | `F2` (`Return` saves, `Esc` cancels) |
+| New Folder | `⇧⌘N` |
+| Duplicate | `⌘D` |
 | Enclosing folder | `⌘↑` |
 | Back / Forward | `⌘[` / `⌘]` |
 | Copy / Cut / Paste | `⌘C` / `⌘X` / `⌘V` |
 | Move to Trash | `⌘⌫` |
-| Undo | `⌘Z` |
+| Delete Immediately | `⌥⌘⌫` |
+| Undo / Redo | `⌘Z` / `⇧⌘Z` |
+| Open in Terminal | `⌥⌘T` |
 | Show hidden files | `⇧⌘.` |
 
 ## Requirements
@@ -59,7 +69,7 @@ Full Disk Access** (add `File Manager.app`, or your Terminal/Xcode when using `s
 
 ## Project layout
 ```
-Sources/FileCore/        File system logic (listing, sorting, copy/move/trash, undo) — no UI
+Sources/FileCore/        File system logic (listing, sorting, copy/move/rename/trash, undo/redo) — no UI
 Sources/FileManagerApp/  The macOS app (SwiftUI + AppKit)
 Tests/FileCoreTests/     Unit tests for FileCore
 scripts/build-app.sh     Builds the .app bundle

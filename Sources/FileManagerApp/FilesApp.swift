@@ -12,6 +12,7 @@ struct FilesApp: App {
                 .frame(minWidth: 720, minHeight: 420)
         }
         .windowToolbarStyle(.unified)
+        .commands { FileCommands() }
     }
 }
 

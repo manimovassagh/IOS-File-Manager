@@ -83,14 +83,15 @@ Principles:
 **Phase 1 deliverable:** an app you can open every day instead of Finder, where moving files around is easy.
 
 ### Phase 2 — File Operations (1–2 weeks)
-- [ ] New Folder, Rename (inline), Duplicate
+- [x] New Folder, Rename (inline), Duplicate
 - [x] Move to Trash (`⌘⌫`, undoable)
-- [ ] Delete Immediately (with confirmation)
-- [ ] Drag & drop within the app and with other apps
-- [ ] Operation queue with a **progress bar**, pause and resume
-- [ ] Redo and full undo history
+- [x] Delete Immediately (with confirmation)
+- [x] Drag & drop within the app and with other apps
+- [x] **Progress bar** (per item) with cancel
+- [ ] Byte-level progress for large files, pause and resume
+- [x] Redo and full undo history
 - [x] Context menu (Open, Copy, Cut, Paste, Move to Trash, Copy Path, Show in Finder)
-- [ ] Open With, Show in Terminal
+- [x] Open With, Open in Terminal
 
 ### Phase 3 — Better than Finder (2–3 weeks)
 - [ ] **Dual pane mode** with `F5`/`F6` to copy/move between panes — top priority of this phase

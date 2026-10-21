@@ -91,6 +91,8 @@ struct StatusBar: View {
     let selectedCount: Int
     let availableCapacity: Int64?
     let activity: String?
+    let progress: OperationProgress?
+    let onCancel: () -> Void
 
     private var text: String {
         var parts = ["\(itemCount) \(itemCount == 1 ? "item" : "items")"]
@@ -106,8 +108,25 @@ struct StatusBar: View {
     var body: some View {
         HStack(spacing: 6) {
             if let activity {
-                ProgressView().controlSize(.small)
-                Text(activity)
+                if let progress, progress.total > 1 {
+                    ProgressView(value: progress.fraction)
+                        .frame(width: 120)
+                    Text("\(activity): \(min(progress.completed + 1, progress.total)) of \(progress.total)")
+                    if !progress.currentName.isEmpty {
+                        Text("— \(progress.currentName)")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: 200, alignment: .leading)
+                    }
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text("\(activity)…")
+                }
+                if progress != nil {
+                    Button("Cancel", action: onCancel)
+                        .buttonStyle(.link)
+                        .help("Stop after the current item")
+                }
             }
             Spacer()
             Text(text)

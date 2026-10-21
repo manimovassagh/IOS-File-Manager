@@ -34,11 +34,14 @@ struct BrowserView: View {
                     itemCount: model.items.count,
                     selectedCount: model.selection.count,
                     availableCapacity: model.availableCapacity,
-                    activity: model.activity
+                    activity: model.activity,
+                    progress: model.progress,
+                    onCancel: { model.cancelOperation() }
                 )
             }
         }
         .navigationTitle(model.title)
+        .focusedSceneObject(model)
         .toolbar { toolbar }
         .alert("Something went wrong", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
@@ -76,6 +79,11 @@ struct BrowserView: View {
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
+            Button { model.newFolder(undoManager: undoManager) } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
+            .help("New Folder (⇧⌘N)")
+
             // ⌘C / ⌘X / ⌘V come from the Edit menu; these buttons are for mouse users.
             Button { model.copySelection() } label: {
                 Label("Copy", systemImage: "doc.on.doc")

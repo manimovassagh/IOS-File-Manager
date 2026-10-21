@@ -16,7 +16,11 @@ final class BrowserModel: ObservableObject {
     @Published var errorMessage: String?
     /// Description of a running operation, e.g. "Copying 3 items…".
     @Published private(set) var activity: String?
+    /// Item-level progress of a running copy/move.
+    @Published private(set) var progress: OperationProgress?
     @Published private(set) var availableCapacity: Int64?
+    /// An item whose name should become editable in the list (set by Rename and New Folder).
+    @Published var renameRequest: URL?
 
     let clipboard: ClipboardController
 
@@ -26,6 +30,7 @@ final class BrowserModel: ObservableObject {
     private var watcher: DirectoryWatcher?
     private var pendingReload: DispatchWorkItem?
     private var loadGeneration = 0
+    private var operationTask: Task<Void, Never>?
 
     init(clipboard: ClipboardController, startURL: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.clipboard = clipboard
@@ -41,6 +46,7 @@ final class BrowserModel: ObservableObject {
     var canGoUp: Bool { currentURL.standardizedFileURL.path != "/" }
     var selectedItems: [FileItem] { items.filter { selection.contains($0.url) } }
     var canPaste: Bool { clipboard.contents != nil && activity == nil }
+    var isBusy: Bool { activity != nil }
 
     // MARK: - Navigation
 
@@ -67,6 +73,17 @@ final class BrowserModel: ObservableObject {
         guard canGoUp else { return }
         // Select the folder we came from, like Finder does.
         navigate(to: currentURL.deletingLastPathComponent(), selecting: [currentURL.standardizedFileURL.path])
+    }
+
+    func open(_ itemsToOpen: [FileItem], withApplicationAt application: URL) {
+        let urls = itemsToOpen.map(\.url)
+        NSWorkspace.shared.open(urls, withApplicationAt: application, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// Opens Terminal in `folder`, or in the current folder.
+    func openTerminal(at folder: URL? = nil) {
+        guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else { return }
+        NSWorkspace.shared.open([folder ?? currentURL], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
     }
 
     func open(_ itemsToOpen: [FileItem]) {
@@ -145,24 +162,65 @@ final class BrowserModel: ObservableObject {
     func paste(undoManager: UndoManager?) {
         clipboard.refreshFromPasteboard()
         guard canPaste, let contents = clipboard.contents else { return }
-        let destination = currentURL
-        let count = contents.urls.count
-        activity = "\(contents.mode == .cut ? "Moving" : "Copying") \(count) \(count == 1 ? "item" : "items")…"
+        transfer(
+            contents.urls, into: currentURL, mode: contents.mode,
+            actionName: contents.mode == .cut ? "Move" : "Copy",
+            undoManager: undoManager,
+            onSuccess: { [clipboard] in
+                if contents.mode == .cut { clipboard.didPaste() }
+            }
+        )
+    }
+
+    /// Makes copies of the selection next to the originals ("file copy.txt").
+    func duplicateSelection(undoManager: UndoManager?) {
+        let urls = selectedItems.map(\.url)
+        guard !urls.isEmpty else { return }
+        transfer(urls, into: currentURL, mode: .copy, actionName: "Duplicate", undoManager: undoManager)
+    }
+
+    /// Handles files dropped onto the list or onto a folder in it.
+    func drop(_ urls: [URL], into destination: URL, mode: FileClipboard.Mode, undoManager: UndoManager?) {
+        transfer(urls, into: destination, mode: mode, actionName: mode == .cut ? "Move" : "Copy", undoManager: undoManager)
+    }
+
+    func cancelOperation() {
+        operationTask?.cancel()
+    }
+
+    /// Copies or moves `urls` into `destination` in the background, with progress, conflict prompts and undo.
+    private func transfer(
+        _ urls: [URL],
+        into destination: URL,
+        mode: FileClipboard.Mode,
+        actionName: String,
+        undoManager: UndoManager?,
+        onSuccess: @escaping () -> Void = {}
+    ) {
+        guard !urls.isEmpty, !isBusy else { return }
+        let count = urls.count
+        activity = "\(mode == .cut ? "Moving" : "Copying") \(count) \(count == 1 ? "item" : "items")"
+        progress = OperationProgress(completed: 0, total: count, currentName: "")
         let prompt = ConflictPrompt()
 
-        Task {
-            defer { activity = nil }
+        operationTask = Task {
+            defer {
+                activity = nil
+                progress = nil
+                operationTask = nil
+            }
             do {
                 let result = try await operations.paste(
-                    contents.urls, into: destination, mode: contents.mode,
-                    onConflict: { await prompt.resolve($0) }
+                    urls, into: destination, mode: mode,
+                    onConflict: { await prompt.resolve($0) },
+                    onProgress: { progress in await self.updateProgress(progress) }
                 )
-                if contents.mode == .cut, result.failures.isEmpty, !result.stopped {
-                    clipboard.didPaste()
+                if result.failures.isEmpty, !result.stopped {
+                    onSuccess()
                 }
-                registerUndo(result.record, actionName: contents.mode == .cut ? "Move" : "Copy", undoManager: undoManager)
-                report(result.failures, verb: "pasted")
-                if destination == currentURL {
+                registerUndo(result.record, actionName: actionName, undoManager: undoManager)
+                report(result.failures, verb: mode == .cut ? "moved" : "copied")
+                if destination.standardizedFileURL.path == currentURL.standardizedFileURL.path {
                     reload(selecting: Set(result.resultURLs.map(\.path)))
                 }
             } catch {
@@ -171,18 +229,84 @@ final class BrowserModel: ObservableObject {
         }
     }
 
-    // MARK: - Trash
+    private func updateProgress(_ newProgress: OperationProgress) {
+        progress = newProgress
+    }
+
+    // MARK: - New folder & rename
+
+    func newFolder(undoManager: UndoManager?) {
+        let directory = currentURL
+        Task {
+            do {
+                let (url, record) = try await operations.createFolder(in: directory)
+                registerUndo(record, actionName: "New Folder", undoManager: undoManager)
+                renameRequest = url
+                reload(selecting: [url.path])
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Makes the selected item's name editable in the list.
+    func renameSelection() {
+        guard selectedItems.count == 1, let item = selectedItems.first else { return }
+        renameRequest = item.url
+    }
+
+    func rename(_ url: URL, to newName: String, undoManager: UndoManager?) {
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name != url.lastPathComponent else { return }
+        Task {
+            do {
+                let (newURL, record) = try await operations.rename(url, to: name)
+                registerUndo(record, actionName: "Rename", undoManager: undoManager)
+                reload(selecting: [newURL.path])
+            } catch {
+                errorMessage = error.localizedDescription
+                reload()
+            }
+        }
+    }
+
+    // MARK: - Trash & delete
 
     func trashSelection(undoManager: UndoManager?) {
         let urls = selectedItems.map(\.url)
-        guard !urls.isEmpty, activity == nil else { return }
-        activity = "Moving \(urls.count) \(urls.count == 1 ? "item" : "items") to the Trash…"
+        guard !urls.isEmpty, !isBusy else { return }
+        activity = "Moving \(urls.count) \(urls.count == 1 ? "item" : "items") to the Trash"
 
         Task {
             defer { activity = nil }
             let result = await operations.moveToTrash(urls)
             registerUndo(result.record, actionName: "Move to Trash", undoManager: undoManager)
             report(result.failures, verb: "moved to the Trash")
+            reload()
+        }
+    }
+
+    /// Permanently deletes the selection after asking for confirmation.
+    func deleteSelectionImmediately() {
+        let urls = selectedItems.map(\.url)
+        guard !urls.isEmpty, !isBusy else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = urls.count == 1
+            ? "Are you sure you want to delete “\(urls[0].lastPathComponent)” immediately?"
+            : "Are you sure you want to delete these \(urls.count) items immediately?"
+        alert.informativeText = "You can’t undo this action."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        activity = "Deleting \(urls.count) \(urls.count == 1 ? "item" : "items")"
+        Task {
+            defer { activity = nil }
+            let result = await operations.deleteImmediately(urls)
+            report(result.failures, verb: "deleted")
             reload()
         }
     }
@@ -197,17 +321,32 @@ final class BrowserModel: ObservableObject {
 
     private func registerUndo(_ record: OperationRecord, actionName: String, undoManager: UndoManager?) {
         guard !record.isEmpty, let undoManager else { return }
-        undoManager.registerUndo(withTarget: self) { model in
+        undoManager.registerUndo(withTarget: self) { [weak undoManager] model in
+            guard let undoManager else { return }
             // Undo is always invoked from the main thread (menu or ⌘Z).
-            MainActor.assumeIsolated { model.performUndo(record) }
+            MainActor.assumeIsolated { model.revert(record, actionName: actionName, undoManager: undoManager) }
         }
         undoManager.setActionName(actionName)
     }
 
-    private func performUndo(_ record: OperationRecord) {
+    /// Undoes `record`. Registering the inverse while the undo manager is undoing puts it on the
+    /// redo stack (and vice versa), so this one function handles both Undo and Redo.
+    ///
+    /// The inverse is only known once the files have moved, but it must be registered right now,
+    /// so it goes in a box that the background work fills in.
+    private func revert(_ record: OperationRecord, actionName: String, undoManager: UndoManager) {
+        let inverse = RecordBox()
+        undoManager.registerUndo(withTarget: self) { [weak undoManager] model in
+            MainActor.assumeIsolated {
+                guard let undoManager, let record = inverse.record else { return }
+                model.revert(record, actionName: actionName, undoManager: undoManager)
+            }
+        }
+        undoManager.setActionName(actionName)
+
         Task {
             do {
-                try await operations.undo(record)
+                inverse.record = try await operations.undo(record)
             } catch {
                 errorMessage = "Couldn’t undo: \(error.localizedDescription)"
             }
@@ -221,4 +360,9 @@ final class BrowserModel: ObservableObject {
         let noun = failures.count == 1 ? "1 item" : "\(failures.count) items"
         errorMessage = "\(noun) couldn’t be \(verb):\n" + lines.joined(separator: "\n")
     }
+}
+
+@MainActor
+private final class RecordBox {
+    var record: OperationRecord?
 }
