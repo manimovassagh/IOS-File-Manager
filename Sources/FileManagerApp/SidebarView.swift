@@ -1,67 +1,92 @@
 import AppKit
 import SwiftUI
 
-struct SidebarLocation: Identifiable, Hashable {
-    let url: URL
+struct SidebarItem: Identifiable, Hashable {
+    let id: String
+    let location: Location
     let name: String
     let systemImage: String
 
-    var id: String { url.standardizedFileURL.path }
-
-    static var favorites: [SidebarLocation] {
+    static var favorites: [SidebarItem] {
         let fileManager = FileManager.default
-        func folder(_ directory: FileManager.SearchPathDirectory) -> URL? {
-            fileManager.urls(for: directory, in: .userDomainMask).first
+        func folder(_ directory: FileManager.SearchPathDirectory, _ image: String) -> SidebarItem? {
+            guard let url = fileManager.urls(for: directory, in: .userDomainMask).first else { return nil }
+            return folderItem(url, image)
         }
-        let candidates: [(URL?, String)] = [
-            (fileManager.homeDirectoryForCurrentUser, "house"),
-            (folder(.desktopDirectory), "menubar.dock.rectangle"),
-            (folder(.documentDirectory), "doc"),
-            (folder(.downloadsDirectory), "arrow.down.circle"),
-            (URL(fileURLWithPath: "/Applications", isDirectory: true), "square.grid.2x2"),
+        let items: [SidebarItem?] = [
+            SidebarItem(id: "recents", location: .recents, name: "Recents", systemImage: "clock"),
+            folderItem(fileManager.homeDirectoryForCurrentUser, "house"),
+            folder(.desktopDirectory, "menubar.dock.rectangle"),
+            SidebarItem(id: "screenshots", location: .screenshots, name: "Screenshots", systemImage: "camera.viewfinder"),
+            folder(.documentDirectory, "doc"),
+            folder(.downloadsDirectory, "arrow.down.circle"),
+            folder(.picturesDirectory, "photo"),
+            folderItem(URL(fileURLWithPath: "/Applications", isDirectory: true), "square.grid.2x2"),
         ]
-        return candidates.compactMap { url, image in
-            guard let url else { return nil }
-            return SidebarLocation(url: url, name: fileManager.displayName(atPath: url.path), systemImage: image)
-        }
+        return items.compactMap { $0 }
     }
 
-    static var volumes: [SidebarLocation] {
+    static var locations: [SidebarItem] {
+        var result: [SidebarItem] = []
+        let iCloud = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
+        if FileManager.default.fileExists(atPath: iCloud.path) {
+            result.append(SidebarItem(id: iCloud.path, location: .folder(iCloud), name: "iCloud Drive", systemImage: "icloud"))
+        }
+
         let keys: [URLResourceKey] = [.volumeLocalizedNameKey, .volumeIsInternalKey]
-        let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
-        return urls.map { url in
+        let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
+        for url in volumes {
             let values = try? url.resourceValues(forKeys: Set(keys))
             let isInternal = values?.volumeIsInternal ?? (url.path == "/")
-            return SidebarLocation(
-                url: url,
+            result.append(SidebarItem(
+                id: url.standardizedFileURL.path,
+                location: .folder(url),
                 name: values?.volumeLocalizedName ?? url.lastPathComponent,
                 systemImage: isInternal ? "internaldrive" : "externaldrive"
-            )
+            ))
+        }
+        return result
+    }
+
+    private static func folderItem(_ url: URL, _ image: String) -> SidebarItem {
+        SidebarItem(
+            id: url.standardizedFileURL.path,
+            location: .folder(url),
+            name: FileManager.default.displayName(atPath: url.path),
+            systemImage: image
+        )
+    }
+
+    /// The sidebar id for a location, used to highlight the matching row.
+    static func id(for location: Location) -> String {
+        switch location {
+        case .folder(let url): return url.standardizedFileURL.path
+        case .recents: return "recents"
+        case .screenshots: return "screenshots"
         }
     }
 }
 
-/// Mounted volumes, refreshed when a disk is mounted or ejected.
+/// Mounted volumes and iCloud Drive, refreshed when a disk is mounted or ejected.
 ///
 /// An `ObservableObject` rather than `@State`: in newer SDKs `@State` is a macro whose plugin
 /// ships only with Xcode, and this project must also build with the Command Line Tools alone.
 @MainActor
-final class VolumeList: ObservableObject {
-    @Published private(set) var volumes = SidebarLocation.volumes
+final class LocationList: ObservableObject {
+    @Published private(set) var items = SidebarItem.locations
 
     func refresh() {
-        volumes = SidebarLocation.volumes
+        items = SidebarItem.locations
     }
 }
 
 struct SidebarView: View {
-    let currentURL: URL
-    let onSelect: (URL) -> Void
+    let location: Location
+    let onSelect: (Location) -> Void
 
-    private let favorites = SidebarLocation.favorites
-    @StateObject private var volumeList = VolumeList()
-
-    private var volumes: [SidebarLocation] { volumeList.volumes }
+    private let favorites = SidebarItem.favorites
+    @StateObject private var locationList = LocationList()
 
     var body: some View {
         List(selection: selection) {
@@ -69,34 +94,34 @@ struct SidebarView: View {
                 ForEach(favorites) { row($0) }
             }
             Section("Locations") {
-                ForEach(volumes) { row($0) }
+                ForEach(locationList.items) { row($0) }
             }
         }
         .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 150, ideal: 190, max: 300)
+        .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 300)
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
-            volumeList.refresh()
+            locationList.refresh()
         }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)) { _ in
-            volumeList.refresh()
+            locationList.refresh()
         }
     }
 
-    private func row(_ location: SidebarLocation) -> some View {
-        Label(location.name, systemImage: location.systemImage)
-            .tag(location.id)
+    private func row(_ item: SidebarItem) -> some View {
+        Label(item.name, systemImage: item.systemImage)
+            .tag(item.id)
     }
 
-    /// Highlights the sidebar row matching the current folder; selecting a row navigates there.
+    /// Highlights the row matching the current location; selecting a row goes there.
     private var selection: Binding<String?> {
         Binding(
             get: {
-                let path = currentURL.standardizedFileURL.path
-                return (favorites + volumes).first { $0.id == path }?.id
+                let id = SidebarItem.id(for: location)
+                return (favorites + locationList.items).contains { $0.id == id } ? id : nil
             },
             set: { id in
-                guard let id, let location = (favorites + volumes).first(where: { $0.id == id }) else { return }
-                onSelect(location.url)
+                guard let id, let item = (favorites + locationList.items).first(where: { $0.id == id }) else { return }
+                onSelect(item.location)
             }
         )
     }

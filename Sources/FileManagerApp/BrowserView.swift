@@ -4,24 +4,24 @@ import SwiftUI
 
 struct BrowserView: View {
     @ObservedObject var clipboard: ClipboardController
+    @ObservedObject var settings: ThemeSettings
     @StateObject private var model: BrowserModel
     @Environment(\.undoManager) private var undoManager
 
-    init(clipboard: ClipboardController) {
+    init(clipboard: ClipboardController, settings: ThemeSettings) {
         self.clipboard = clipboard
+        self.settings = settings
         _model = StateObject(wrappedValue: BrowserModel(clipboard: clipboard))
     }
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(currentURL: model.currentURL) { model.navigate(to: $0) }
+            SidebarView(location: model.location) { model.navigate(to: $0) }
         } detail: {
             VStack(spacing: 0) {
-                FileTableView(model: model, cutPaths: clipboard.cutPaths)
-                Divider()
-                PathBar(url: model.currentURL) { model.navigate(to: $0) }
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if let contents = clipboard.contents {
-                    Divider()
                     ClipboardBar(
                         contents: contents,
                         canPaste: model.canPaste,
@@ -29,6 +29,8 @@ struct BrowserView: View {
                         onClear: { clipboard.clear() }
                     )
                 }
+                Divider()
+                PathBar(components: model.pathComponents) { model.navigate(to: $0) }
                 Divider()
                 StatusBar(
                     itemCount: model.items.count,
@@ -39,10 +41,16 @@ struct BrowserView: View {
                     onCancel: { model.cancelOperation() }
                 )
             }
+            .inspector(isPresented: inspectorBinding) {
+                inspector
+                    .inspectorColumnWidth(min: 240, ideal: 290, max: 420)
+            }
         }
         .navigationTitle(model.title)
+        .searchable(text: $model.filterText, placement: .toolbar, prompt: "Filter")
         .focusedSceneObject(model)
         .toolbar { toolbar }
+        .tint(settings.theme.color)
         .alert("Something went wrong", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -50,38 +58,84 @@ struct BrowserView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             clipboard.refreshFromPasteboard()
+            if model.location.kind == .recents {
+                model.reload()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch model.viewMode {
+        case .list:
+            FileTableView(model: model, settings: settings, cutPaths: clipboard.cutPaths)
+                .overlay { emptyState }
+        case .columns:
+            ColumnBrowserView(model: model, settings: settings, cutPaths: clipboard.cutPaths)
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        if model.items.isEmpty && !model.isLoading {
+            if !model.filterText.isEmpty {
+                ContentUnavailableView.search(text: model.filterText)
+            } else if model.location.kind == .screenshots {
+                ContentUnavailableView(
+                    "No Screenshots",
+                    systemImage: "camera.viewfinder",
+                    description: Text("Screenshots you take (⇧⌘3, ⇧⌘4, ⇧⌘5) appear here.")
+                )
+            } else if model.location.kind == .recents {
+                ContentUnavailableView("No Recent Files", systemImage: "clock")
+            } else {
+                ContentUnavailableView("Empty Folder", systemImage: "folder")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var inspector: some View {
+        let selected = model.selectedItems
+        if selected.count == 1, let item = selected.first {
+            FilePreview(item: item)
+        } else {
+            PreviewPlaceholder(selectedCount: selected.count)
         }
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        // Keyboard shortcuts for these live in the Go and View menus.
         ToolbarItemGroup(placement: .navigation) {
             Button { model.goBack() } label: {
                 Label("Back", systemImage: "chevron.left")
             }
             .disabled(!model.canGoBack)
-            .keyboardShortcut("[", modifiers: .command)
             .help("Back (⌘[)")
 
             Button { model.goForward() } label: {
                 Label("Forward", systemImage: "chevron.right")
             }
             .disabled(!model.canGoForward)
-            .keyboardShortcut("]", modifiers: .command)
             .help("Forward (⌘])")
+        }
 
-            Button { model.goUp() } label: {
-                Label("Enclosing Folder", systemImage: "arrow.up")
+        ToolbarItem(placement: .principal) {
+            Picker("View", selection: $model.viewMode) {
+                Label("List", systemImage: "list.bullet").tag(ViewMode.list)
+                Label("Columns", systemImage: "rectangle.split.3x1").tag(ViewMode.columns)
             }
-            .disabled(!model.canGoUp)
-            .keyboardShortcut(.upArrow, modifiers: .command)
-            .help("Enclosing Folder (⌘↑)")
+            .pickerStyle(.segmented)
+            .labelStyle(.iconOnly)
+            .help("View as List (⌘1) or Columns (⌘3)")
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
             Button { model.newFolder(undoManager: undoManager) } label: {
                 Label("New Folder", systemImage: "folder.badge.plus")
             }
+            .disabled(!model.acceptsNewItems)
             .help("New Folder (⇧⌘N)")
 
             // ⌘C / ⌘X / ⌘V come from the Edit menu; these buttons are for mouse users.
@@ -115,9 +169,22 @@ struct BrowserView: View {
                     systemImage: model.showHidden ? "eye" : "eye.slash"
                 )
             }
-            .keyboardShortcut(".", modifiers: [.command, .shift])
             .help("Show/Hide Hidden Files (⇧⌘.)")
+
+            Button { model.showInspector.toggle() } label: {
+                Label("Preview", systemImage: "sidebar.right")
+            }
+            .disabled(model.viewMode != .list)
+            .help("Show/Hide Preview (⌥⌘I)")
         }
+    }
+
+    /// The column view has its own preview pane, so the inspector is only for the list view.
+    private var inspectorBinding: Binding<Bool> {
+        Binding(
+            get: { model.showInspector && model.viewMode == .list },
+            set: { model.showInspector = $0 }
+        )
     }
 
     private var errorBinding: Binding<Bool> {

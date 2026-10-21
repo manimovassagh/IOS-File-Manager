@@ -4,46 +4,47 @@ import SwiftUI
 
 /// Clickable breadcrumb of the current folder's path.
 struct PathBar: View {
-    let url: URL
+    let components: [PathComponent]
     let onSelect: (URL) -> Void
-
-    private var components: [URL] {
-        var result: [URL] = []
-        var current = url.standardizedFileURL
-        for _ in 0..<128 {
-            result.insert(current, at: 0)
-            if current.path == "/" { break }
-            current = current.deletingLastPathComponent().standardizedFileURL
-        }
-        return result
-    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(Array(components.enumerated()), id: \.offset) { index, component in
+            HStack(spacing: 2) {
+                ForEach(Array(components.enumerated()), id: \.element.id) { index, component in
                     if index > 0 {
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
+                        Image(systemName: "chevron.compact.right")
+                            .font(.callout)
                             .foregroundStyle(.tertiary)
                     }
+                    let isLast = index == components.count - 1
                     Button {
-                        onSelect(component)
+                        if let url = component.url { onSelect(url) }
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: component.path))
-                                .resizable()
-                                .frame(width: 14, height: 14)
-                            Text(FileManager.default.displayName(atPath: component.path))
+                        HStack(spacing: 5) {
+                            if let systemImage = component.systemImage {
+                                Image(systemName: systemImage)
+                                    .foregroundStyle(.tint)
+                            } else if let url = component.url {
+                                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                                    .resizable()
+                                    .frame(width: 15, height: 15)
+                            }
+                            Text(component.title)
+                                .fontWeight(isLast ? .semibold : .regular)
                         }
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(isLast ? AnyShapeStyle(.tint.opacity(0.14)) : AnyShapeStyle(.clear), in: Capsule())
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .help(component.url?.path ?? component.title)
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
         }
         .font(.callout)
-        .frame(height: 26)
+        .frame(height: 30)
     }
 }
 
@@ -67,12 +68,14 @@ struct ClipboardBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: contents.mode == .cut ? "scissors" : "doc.on.doc")
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(.tint)
             Text(summary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
             Button("Paste Here", action: onPaste)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
                 .disabled(!canPaste)
             Button(action: onClear) {
                 Image(systemName: "xmark.circle.fill")
@@ -80,9 +83,11 @@ struct ClipboardBar: View {
             .buttonStyle(.borderless)
             .help("Clear the clipboard")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.accentColor.opacity(0.08))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 }
 
