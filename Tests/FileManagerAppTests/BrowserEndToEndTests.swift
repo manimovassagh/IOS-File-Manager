@@ -226,6 +226,7 @@ final class BrowserEndToEndTests: XCTestCase {
             let nameCell = try XCTUnwrap(table.view(atColumn: 0, row: 2, makeIfNecessary: true) as? NSTableCellView)
             XCTAssertEqual(nameCell.textField?.textColor, palette.text, "\(theme): name color")
             XCTAssertEqual(NSApp.appearance?.name, palette.isDark ? .darkAqua : .aqua)
+            XCTAssertEqual(window?.backgroundColor, palette.bar, "\(theme): window/toolbar color")
             snapshot("theme-\(theme.rawValue)-\(mode.rawValue)")
         }
     }

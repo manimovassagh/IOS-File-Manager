@@ -63,6 +63,7 @@ struct BrowserView: View {
         }
         .themeForeground(settings.palette?.text)
         .themeToolbar(settings.palette?.bar)
+        .background(WindowThemer(color: settings.palette?.bar))
         .navigationTitle(model.title)
         .searchable(text: $model.filterText, placement: .toolbar, prompt: "Filter")
         .focusedSceneObject(model)
@@ -209,6 +210,25 @@ struct BrowserView: View {
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
         )
+    }
+}
+
+/// Newer macOS draws the toolbar itself and ignores `toolbarBackground`, so color themes also
+/// paint the window behind a transparent title bar, which colors the toolbar area.
+private struct WindowThemer: NSViewRepresentable {
+    let color: NSColor?
+
+    func makeNSView(context: Context) -> NSView {
+        NSView()
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        let color = color
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.titlebarAppearsTransparent = color != nil
+            window.backgroundColor = color ?? .windowBackgroundColor
+        }
     }
 }
 
