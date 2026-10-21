@@ -204,19 +204,36 @@ final class BrowserEndToEndTests: XCTestCase {
         return nil
     }
 
+    /// Saves what the window really looks like on screen (via `screencapture`), falling back to
+    /// drawing the view hierarchy, which can misdraw scroll views and SwiftUI materials.
     @MainActor
     private func snapshot(_ name: String) {
-        guard let view = window?.contentView else { return }
-        view.layoutSubtreeIfNeeded()
-        view.display()
-        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        guard let data = bitmap.representation(using: .png, properties: [:]) else { return }
-
+        guard let window, let view = window.contentView else { return }
         let directory = ProcessInfo.processInfo.environment["SNAPSHOT_DIR"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("FileManagerSnapshots")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: directory.appendingPathComponent("\(name).png"))
+        let file = directory.appendingPathComponent("\(name).png")
+        try? FileManager.default.removeItem(at: file)
+
+        NSApp.activate()
+        window.orderFrontRegardless()
+        view.layoutSubtreeIfNeeded()
+        view.display()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+
+        let capture = Process()
+        capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        capture.arguments = ["-x", "-o", "-l\(window.windowNumber)", file.path]
+        try? capture.run()
+        capture.waitUntilExit()
+        let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+        if capture.terminationStatus == 0, size > 0 {
+            return
+        }
+
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try? bitmap.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("\(name)-drawn.png"))
     }
 
     private static func writePNG(to url: URL, color: NSColor, label: String) throws {
