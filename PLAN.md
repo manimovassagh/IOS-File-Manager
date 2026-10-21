@@ -98,6 +98,8 @@ Principles:
 - [ ] **Tabs**
 - [ ] **Icon view**
 - [x] **Column view** with a preview pane
+- [x] Thumbnails for images, videos and PDFs; thumbnail rows + automatic preview in Screenshots
+- [x] End-to-end UI tests with real-window screenshots in CI
 - [x] **Quick Look** with Space, plus a preview (inspector) panel
 - [ ] **Folder size calculation** in List view
 - [x] Instant in-folder filter
