@@ -29,7 +29,8 @@ struct ColumnBrowserView: NSViewRepresentable {
 final class ColumnsHostView: NSView {
     let scrollView = NSScrollView()
     private let documentView = FlippedView()
-    private(set) var panes: [(view: NSView, width: CGFloat)] = []
+    /// Side-by-side panes. A `nil` width means "fill the remaining space" (the preview).
+    private(set) var panes: [(view: NSView, width: CGFloat?)] = []
     /// Panes that have had their first real layout (and were scrolled to the top then).
     private var laidOutPanes: Set<ObjectIdentifier> = []
 
@@ -51,7 +52,7 @@ final class ColumnsHostView: NSView {
         fatalError("init(coder:) is not supported")
     }
 
-    func setPanes(_ newPanes: [(view: NSView, width: CGFloat)]) {
+    func setPanes(_ newPanes: [(view: NSView, width: CGFloat?)]) {
         let newViews = Set(newPanes.map { ObjectIdentifier($0.view) })
         for pane in panes where !newViews.contains(ObjectIdentifier(pane.view)) {
             pane.view.removeFromSuperview()
@@ -69,10 +70,13 @@ final class ColumnsHostView: NSView {
         super.layout()
         scrollView.frame = bounds
         let height = max(scrollView.contentSize.height, 1)
+        let fixedWidth = panes.compactMap(\.width).reduce(0, +)
+        let flexibleWidth = max(ColumnBrowserController.minPreviewWidth, scrollView.contentSize.width - fixedWidth)
         var x: CGFloat = 0
         for pane in panes {
-            pane.view.frame = NSRect(x: x, y: 0, width: pane.width, height: height)
-            x += pane.width
+            let width = pane.width ?? flexibleWidth
+            pane.view.frame = NSRect(x: x, y: 0, width: width, height: height)
+            x += width
         }
         documentView.frame = NSRect(x: 0, y: 0, width: max(x, scrollView.contentSize.width), height: height)
         for pane in panes {
@@ -180,7 +184,15 @@ final class BrowserColumn {
 @MainActor
 final class ColumnBrowserController {
     static let columnWidth: CGFloat = 240
-    static let previewWidth: CGFloat = 320
+    /// Screenshot columns are wider so the full name (with date and time) fits next to the thumbnail.
+    static let thumbnailColumnWidth: CGFloat = 380
+    /// The preview fills the space after the columns, but is never narrower than this.
+    static let minPreviewWidth: CGFloat = 360
+
+    static func width(for source: ItemSource) -> CGFloat {
+        if case .screenshots = source { return thumbnailColumnWidth }
+        return columnWidth
+    }
 
     let hostView = ColumnsHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
     private let model: BrowserModel
@@ -276,9 +288,9 @@ final class ColumnBrowserController {
     }
 
     private func layoutPanes() {
-        var panes: [(view: NSView, width: CGFloat)] = columns.map { ($0.container, Self.columnWidth) }
+        var panes: [(view: NSView, width: CGFloat?)] = columns.map { ($0.container, Self.width(for: $0.source)) }
         if let preview {
-            panes.append((preview, Self.previewWidth))
+            panes.append((preview, nil))
         }
         hostView.setPanes(panes)
         DispatchQueue.main.async { [weak self] in self?.hostView.scrollToEnd() }

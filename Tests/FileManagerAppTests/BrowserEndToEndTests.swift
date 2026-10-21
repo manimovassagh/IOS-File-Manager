@@ -69,7 +69,7 @@ final class BrowserEndToEndTests: XCTestCase {
         XCTAssertTrue(wait(pump) { controller.preview != nil })
         let preview = try XCTUnwrap(controller.preview)
         XCTAssertEqual(preview.frame.minX, ColumnBrowserController.columnWidth * 2)
-        XCTAssertEqual(preview.frame.width, ColumnBrowserController.previewWidth)
+        assertPreviewFillsRemainingSpace(preview, in: controller.hostView)
         XCTAssertEqual(model.currentURL.lastPathComponent, "Documents", "Paste should go into the focused column")
         snapshot("columns-2-preview")
 
@@ -128,6 +128,39 @@ final class BrowserEndToEndTests: XCTestCase {
         snapshot("screenshots-1-thumbnails")
     }
 
+    @MainActor
+    func testScreenshotsInColumnViewShowFullNamesAndLargePreview() throws {
+        let model = BrowserModel(clipboard: ClipboardController(), start: .screenshots)
+        model.viewMode = .columns
+        let controller = ColumnBrowserController(model: model)
+        show(controller.hostView)
+        let pump = { controller.update(settings: .shared, cutPaths: []) }
+
+        XCTAssertTrue(wait(pump) { controller.columns.first?.list.items.count == 1 })
+        let column = try XCTUnwrap(controller.columns.first)
+        XCTAssertEqual(column.container.frame.width, ColumnBrowserController.thumbnailColumnWidth)
+        XCTAssertEqual(column.list.tableView.rowHeight, RowSize.thumbnails.rowHeight)
+        assertFirstRowVisible(column.list.tableView)
+
+        // The whole name (with date and time) fits; it isn't cut to "Screensho….png".
+        let cell = try XCTUnwrap(column.list.tableView.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTableCellView)
+        let label = try XCTUnwrap(cell.textField)
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertLessThanOrEqual(
+            label.attributedStringValue.size().width, label.frame.width + 1,
+            "“\(label.stringValue)” doesn't fit in \(label.frame.width) pt"
+        )
+
+        // Selecting the screenshot shows a large preview filling the rest of the window.
+        column.list.tableView.selectRowIndexes([0], byExtendingSelection: false)
+        XCTAssertTrue(wait(pump) { controller.preview != nil })
+        let preview = try XCTUnwrap(controller.preview)
+        assertPreviewFillsRemainingSpace(preview, in: controller.hostView)
+        XCTAssertGreaterThan(FilePreview.imageHeight(for: preview.frame.size), preview.frame.height * 0.6)
+        wait(timeout: 3) { false }  // let the full-size image load
+        snapshot("screenshots-2-columns-preview")
+    }
+
     // MARK: - Whole window
 
     /// The full SwiftUI window (sidebar, columns, bars) in both views, mainly for the screenshots.
@@ -158,6 +191,18 @@ final class BrowserEndToEndTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// The preview is the last pane and fills the space after the columns.
+    @MainActor
+    private func assertPreviewFillsRemainingSpace(
+        _ preview: NSView, in host: ColumnsHostView, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertGreaterThanOrEqual(preview.frame.width, ColumnBrowserController.minPreviewWidth, file: file, line: line)
+        XCTAssertEqual(preview.frame.maxX, max(host.scrollView.contentSize.width, preview.frame.maxX), accuracy: 1,
+                       "Preview should reach the right edge", file: file, line: line)
+        XCTAssertEqual(preview.frame.maxX, host.scrollView.contentSize.width, accuracy: 1,
+                       "Preview should fill the rest of the window", file: file, line: line)
+    }
 
     /// Checks the first row is really on screen: inside the table's visible area *and*, in window
     /// coordinates, inside the visible part of every enclosing view (a misplaced scroll view can
