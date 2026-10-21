@@ -46,8 +46,10 @@ final class BrowserModel: ObservableObject {
             navigationID += 1
         }
     }
-    /// Preview panel next to the list view.
-    @Published var showInspector = false
+    /// Preview panel next to the list view. Remembered per kind of location; on by default in Screenshots.
+    @Published var showInspector = false {
+        didSet { inspectorPreference[location.kind] = showInspector }
+    }
     @Published var errorMessage: String?
     /// Description of a running operation, e.g. "Copying 3 items".
     @Published private(set) var activity: String?
@@ -66,6 +68,7 @@ final class BrowserModel: ObservableObject {
     private let settings = ThemeSettings.shared
     private(set) var baseURL: URL
     private var sorts: [Location.Kind: FileSort] = [:]
+    private var inspectorPreference: [Location.Kind: Bool] = [.screenshots: true]
     private var backStack: [Location] = []
     private var forwardStack: [Location] = []
     private var watcher: DirectoryWatcher?
@@ -225,6 +228,7 @@ final class BrowserModel: ObservableObject {
             sort = sorts[newLocation.kind] ?? newLocation.kind.defaultSort
         }
         location = newLocation
+        showInspector = inspectorPreference[newLocation.kind] ?? false
         baseURL = newLocation.baseURL
         currentURL = baseURL
         allItems = []
@@ -233,7 +237,7 @@ final class BrowserModel: ObservableObject {
         filterText = ""
         navigationID += 1
         watch(currentURL)
-        reload(selecting: paths)
+        reload(selecting: paths.isEmpty ? nil : paths)
     }
 
     /// Column view: the user moved focus to the column showing `folder`.
@@ -269,7 +273,6 @@ final class BrowserModel: ObservableObject {
         let generation = loadGeneration
         let source = itemSource(for: currentURL)
         let includeHidden = showHidden
-        let keep = paths ?? Set(selection.map(\.path))
         isLoading = true
 
         Task {
@@ -284,6 +287,8 @@ final class BrowserModel: ObservableObject {
 
             switch result {
             case .success(let loaded):
+                // Use the selection as it is now: the user may have clicked something while this loaded.
+                let keep = paths ?? Set(selection.map(\.path))
                 allItems = loaded
                 applyFilterAndSort()
                 selection = Set(items.filter { keep.contains($0.url.path) }.map(\.url))

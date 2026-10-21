@@ -24,7 +24,7 @@ struct SettingsView: View {
 
             Section("File list") {
                 Picker("Row size", selection: $settings.rowSize) {
-                    ForEach(RowSize.allCases) { Text($0.title).tag($0) }
+                    ForEach(RowSize.selectable) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 Toggle("Alternating row colors", isOn: $settings.alternatingRows)

@@ -151,12 +151,14 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         isUpdating = false
     }
 
-    func apply(_ settings: ThemeSettings) {
+    /// Applies the look from Settings; `rowSize` overrides the row size (e.g. thumbnails for Screenshots).
+    func apply(_ settings: ThemeSettings, rowSize override: RowSize? = nil) {
         let accent = settings.theme.nsColor
-        let changed = settings.rowSize != rowSize || accent != accentColor
+        let newRowSize = override ?? settings.rowSize
+        let changed = newRowSize != rowSize || accent != accentColor
             || tableView.usesAlternatingRowBackgroundColors != settings.alternatingRows
         guard changed else { return }
-        rowSize = settings.rowSize
+        rowSize = newRowSize
         accentColor = accent
         tableView.rowHeight = rowSize.rowHeight
         tableView.usesAlternatingRowBackgroundColors = settings.alternatingRows
@@ -207,8 +209,8 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             cell.textField?.stringValue = item.name
             cell.textField?.isEditable = false
             cell.textField?.delegate = self
-            cell.imageView?.image = NSWorkspace.shared.icon(forFile: item.url.path)
             cell.showsChevron = style == .column && item.isBrowsable
+            showIcon(for: item, in: cell)
         case .dateModified:
             cell.textField?.stringValue = item.dateModified?.formatted(date: .abbreviated, time: .shortened) ?? "--"
         case .size:
@@ -225,6 +227,23 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             cell.alphaValue = 1
         }
         return cell
+    }
+
+    /// Shows the file's icon right away, then swaps in a real thumbnail for images, videos and PDFs.
+    private func showIcon(for item: FileItem, in cell: FileCellView) {
+        cell.representedPath = item.url.path
+        let size = rowSize.iconSize
+        let thumbnails = ThumbnailCache.shared
+        if let cached = thumbnails.cachedThumbnail(for: item.url, size: size, modified: item.dateModified) {
+            cell.imageView?.image = cached
+            return
+        }
+        cell.imageView?.image = NSWorkspace.shared.icon(forFile: item.url.path)
+        guard !item.isDirectory, ThumbnailCache.supportsThumbnail(item.url) else { return }
+        thumbnails.loadThumbnail(for: item.url, size: size, modified: item.dateModified) { [weak cell] image in
+            guard let cell, cell.representedPath == item.url.path else { return }
+            cell.imageView?.image = image
+        }
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
@@ -703,6 +722,8 @@ final class FileCellView: NSTableCellView {
     private var iconHeight: NSLayoutConstraint?
     private let chevron = NSImageView()
     private var appliedSize: RowSize?
+    /// The file this cell currently shows, so late thumbnails don't land on a reused cell.
+    var representedPath: String?
 
     var showsChevron = false {
         didSet { chevron.isHidden = !showsChevron }

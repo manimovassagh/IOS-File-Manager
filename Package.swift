@@ -14,5 +14,7 @@ let package = Package(
         // The macOS app (SwiftUI + AppKit).
         .executableTarget(name: "FileManagerApp", dependencies: ["FileCore"]),
         .testTarget(name: "FileCoreTests", dependencies: ["FileCore"]),
+        // End-to-end tests: real windows with the app's views on a folder of test files.
+        .testTarget(name: "FileManagerAppTests", dependencies: ["FileManagerApp", "FileCore"]),
     ]
 )
