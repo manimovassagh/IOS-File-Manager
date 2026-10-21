@@ -6,12 +6,19 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15: Xcode 16 / Swift 6.1. macos-26: newest Xcode, matching current Macs.
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Swift version
-        run: swift --version
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: Build
         run: swift build
@@ -27,5 +34,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: File-Manager-app
+          name: File-Manager-app-${{ matrix.runner }}
           path: build/File-Manager.zip
