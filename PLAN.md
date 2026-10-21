@@ -1,137 +1,136 @@
-# پلن ساخت فایل منیجر شخصی برای macOS
+# Plan: A Custom File Manager for macOS
 
-> نکته: اسم ریپو «iOS File Manager» است، ولی هدف جایگزینی Finder روی مک‌بوک است، پس اپ **فقط برای macOS** ساخته می‌شود (نسخه‌ی iPhone/iPad در برنامه نیست).
+> Note: the repository is called "iOS File Manager", but the goal is to replace Finder on a MacBook. The app targets **macOS only** (no iPhone/iPad version is planned).
 
-## هدف اصلی
-مشکل اصلی با Finder: **کپی، کات و پیست سخت و پردردسر است** و کار با فایل‌ها روان نیست.
-پس اولویت شماره‌ی یک این اپ:
-- **Cut واقعی**: `⌘X` روی فایل، بعد `⌘V` در مقصد → فایل منتقل می‌شود (بدون ترفند `⌘⌥V` در Finder).
-- **کپی/پیست ساده و قابل پیش‌بینی**: هم با کیبورد، هم با راست‌کلیک، هم با دکمه‌ی تولبار.
-- **نشانگر کلیپبورد**: همیشه ببینی چه فایل‌هایی کپی/کات شده‌اند و بتوانی لغوش کنی.
-- **دو پنل کنار هم**: فایل را از یک پنل به پنل دیگر بکشی یا با یک کلید (`F5` کپی، `F6` انتقال) جابه‌جا کنی.
-- **مدیریت تداخل نام واضح**: جایگزین کن / هر دو را نگه دار / رد کن — برای همه یکجا.
+## Main Goal
+The core problem with Finder: **copy, cut and paste are awkward and frustrating**, and working with files doesn't feel smooth.
+So the number one priority of this app is:
+- **Real Cut**: `⌘X` on a file, then `⌘V` at the destination moves it (no hidden `⌘⌥V` trick like in Finder).
+- **Simple, predictable copy/paste**: via keyboard, right-click menu, and toolbar buttons.
+- **Clipboard indicator**: always see which files are copied/cut, with the option to cancel.
+- **Dual pane**: drag files from one pane to the other, or move them with a single key (`F5` copy, `F6` move).
+- **Clear name-conflict handling**: Replace / Keep Both / Skip — with an "apply to all" option.
 
 ---
 
-## ۱. تکنولوژی پیشنهادی
+## 1. Tech Stack
 
-| بخش | انتخاب | دلیل |
+| Area | Choice | Reason |
 |---|---|---|
-| زبان | **Swift 6** | زبان بومی اپل، سریع، دسترسی کامل به APIهای سیستم |
-| رابط کاربری | **SwiftUI + AppKit** | SwiftUI برای پنجره‌ها، سایدبار و تنظیمات؛ `NSTableView`/`NSOutlineView` (AppKit) برای لیست فایل‌ها چون با پوشه‌های ده‌هزار فایلی خیلی سریع‌تر از SwiftUI است |
-| حداقل نسخه | **macOS 14 (Sonoma)** (قابل تغییر بر اساس نسخه‌ی مک‌بوک تو) | APIهای جدید SwiftUI و `@Observable` |
-| فایل‌سیستم | `FileManager`، `URL resourceValues`، `FSEvents` | خواندن متادیتا و تشخیص تغییرات زنده |
-| پیش‌نمایش | `QuickLookThumbnailing` و `QLPreviewPanel` | thumbnail و Quick Look مثل Finder |
-| جستجو | `NSMetadataQuery` (Spotlight) + جستجوی مستقیم | جستجوی سریع در کل دیسک |
-| ساخت پروژه | Xcode + **Swift Package** برای ماژول Core | تست‌پذیری و جداسازی منطق از UI |
-| CI | GitHub Actions (runner مک) | build و تست خودکار روی هر push |
+| Language | **Swift 6** | Native Apple language, fast, full access to system APIs |
+| UI | **SwiftUI + AppKit** | SwiftUI for windows, sidebar and settings; `NSTableView`/`NSOutlineView` (AppKit) for file lists, since it is much faster than SwiftUI with folders containing tens of thousands of files |
+| Minimum version | **macOS 14 (Sonoma)** (adjustable to match your MacBook) | Newer SwiftUI APIs and `@Observable` |
+| File system | `FileManager`, `URL resourceValues`, `FSEvents` | Metadata reading and live change detection |
+| Preview | `QuickLookThumbnailing` and `QLPreviewPanel` | Thumbnails and Quick Look like Finder |
+| Search | `NSMetadataQuery` (Spotlight) + direct search | Fast disk-wide search |
+| Project setup | Xcode + a **Swift Package** for the Core module | Testability and separation of logic from UI |
+| CI | GitHub Actions (macOS runner) | Automatic build and tests on every push |
 
-> **Sandbox:** چون اپ شخصی است و در App Store منتشر نمی‌شود، App Sandbox را **خاموش** می‌کنیم تا به همه‌ی فایل‌ها دسترسی کامل داشته باشیم. فقط لازم است یک بار در System Settings → Privacy & Security → **Full Disk Access** به اپ اجازه بدهیم.
+> **Sandbox:** since this is a personal app not distributed via the App Store, App Sandbox is **disabled** so we get full access to all files. You only need to grant the app **Full Disk Access** once in System Settings → Privacy & Security.
 
 ---
 
-## ۲. معماری
+## 2. Architecture
 
 ```
 FileManagerApp (macOS App target)
 ├── UI/                 ← SwiftUI views + AppKit wrappers
-│   ├── Sidebar         (Favorites، دیسک‌ها، تگ‌ها)
+│   ├── Sidebar         (Favorites, volumes, tags)
 │   ├── Browser         (List / Icon / Column view)
 │   ├── Toolbar & PathBar
-│   ├── Inspector       (اطلاعات فایل، preview)
+│   ├── Inspector       (file info, preview)
 │   └── Settings
-└── ViewModels/         ← وضعیت هر تب/پنجره
+└── ViewModels/         ← per-tab/window state
 
-FileCore (Swift Package — بدون وابستگی به UI)
+FileCore (Swift Package — no UI dependencies)
 ├── FileSystemService   (list, copy, move, rename, trash, delete)
 ├── DirectoryWatcher    (FSEvents)
-├── FileOperationQueue  (کارهای طولانی با progress و cancel و undo)
+├── FileOperationQueue  (long-running jobs with progress, cancel and undo)
 ├── SearchService
 ├── ThumbnailService    (cache)
 └── Models              (FileItem, Volume, Tag, ...)
 ```
 
-اصول:
-- **هیچ عملیات فایل روی main thread اجرا نمی‌شود** (async/await + actors).
-- همه‌ی عملیات‌های مخرب از **Undo** پشتیبانی می‌کنند و «حذف» پیش‌فرض یعنی انتقال به Trash.
-- FileCore تست واحد (unit test) کامل دارد، روی پوشه‌های موقت.
+Principles:
+- **No file operation ever runs on the main thread** (async/await + actors).
+- All destructive operations support **Undo**, and "delete" defaults to moving to Trash.
+- FileCore has full unit test coverage, running against temporary directories.
 
 ---
 
-## ۳. فازهای پروژه
+## 3. Project Phases
 
-### فاز ۰ — راه‌اندازی (۱–۲ روز)
-- [ ] ساخت پروژه‌ی Xcode (macOS App) + Swift Package به اسم `FileCore`
-- [ ] `.gitignore`، README، SwiftLint/SwiftFormat
-- [ ] GitHub Actions برای build و تست
-- [ ] خاموش کردن Sandbox و تست Full Disk Access
+### Phase 0 — Setup (1–2 days)
+- [ ] Create the Xcode project (macOS App) + a Swift Package named `FileCore`
+- [ ] `.gitignore`, README, SwiftLint/SwiftFormat
+- [ ] GitHub Actions for build and tests
+- [ ] Disable Sandbox and verify Full Disk Access
 
-### فاز ۱ — MVP: مرور فایل‌ها + کپی/کات/پیست (۲–۳ هفته)
-- [ ] پنجره با **سایدبار** (Home، Desktop، Downloads، Documents، Applications، دیسک‌های متصل)
-- [ ] **List view** با ستون‌های Name / Size / Kind / Date Modified، مرتب‌سازی با کلیک روی ستون
-- [ ] ناوبری: دابل‌کلیک، Back/Forward، Enclosing folder (`⌘↑`)، **Path bar**
-- [ ] باز کردن فایل با اپ پیش‌فرض (`NSWorkspace`)
-- [ ] نمایش/مخفی کردن فایل‌های hidden (`⌘⇧.`)
-- [ ] به‌روزرسانی زنده با FSEvents
-- [ ] **Copy / Cut / Paste** (`⌘C` / `⌘X` / `⌘V`) با Cut واقعی — مهم‌ترین قابلیت
-- [ ] نشانگر کلیپبورد در پایین پنجره (چه چیزی کپی/کات شده + دکمه‌ی لغو)
-- [ ] فایل‌های کات‌شده کم‌رنگ نمایش داده شوند تا معلوم باشد منتقل خواهند شد
-- [ ] پنجره‌ی تداخل نام (Replace / Keep Both / Skip، با گزینه‌ی «برای همه»)
-- [ ] Undo برای پیست و انتقال (`⌘Z`)
+### Phase 1 — MVP: Browsing + Copy/Cut/Paste (2–3 weeks)
+- [ ] Window with a **sidebar** (Home, Desktop, Downloads, Documents, Applications, mounted volumes)
+- [ ] **List view** with Name / Size / Kind / Date Modified columns, sortable by clicking a column
+- [ ] Navigation: double-click, Back/Forward, enclosing folder (`⌘↑`), **path bar**
+- [ ] Open files with the default app (`NSWorkspace`)
+- [ ] Show/hide hidden files (`⌘⇧.`)
+- [ ] Live updates via FSEvents
+- [ ] **Copy / Cut / Paste** (`⌘C` / `⌘X` / `⌘V`) with real Cut — the most important feature
+- [ ] Clipboard indicator at the bottom of the window (what is copied/cut + a cancel button)
+- [ ] Cut files shown dimmed so it's clear they will be moved
+- [ ] Name-conflict dialog (Replace / Keep Both / Skip, with "apply to all")
+- [ ] Undo for paste and move (`⌘Z`)
 
-**خروجی فاز ۱:** اپی که بتوانی هر روز به جای Finder باز کنی و جابه‌جا کردن فایل‌ها در آن راحت باشد.
+**Phase 1 deliverable:** an app you can open every day instead of Finder, where moving files around is easy.
 
-### فاز ۲ — عملیات روی فایل‌ها (۱–۲ هفته)
-- [ ] New Folder، Rename (inline)، Duplicate
-- [ ] Move to Trash، Delete Immediately (با تأیید)
-- [ ] Drag & Drop داخل اپ و با اپ‌های دیگر
-- [ ] صف عملیات با **progress bar**، توقف، و ادامه
-- [ ] Redo و تاریخچه‌ی کامل Undo
-- [ ] منوی راست‌کلیک (Context menu)، Open With، Show in Terminal، Copy Path
+### Phase 2 — File Operations (1–2 weeks)
+- [ ] New Folder, Rename (inline), Duplicate
+- [ ] Move to Trash, Delete Immediately (with confirmation)
+- [ ] Drag & drop within the app and with other apps
+- [ ] Operation queue with a **progress bar**, pause and resume
+- [ ] Redo and full undo history
+- [ ] Context menu, Open With, Show in Terminal, Copy Path
 
-### فاز ۳ — بهتر از Finder (۲–۳ هفته)
-این‌ها همان دلایلی هستند که از Finder راضی نیستی — اولویتشان را خودت مشخص کن:
-- [ ] **حالت دو پنله (Dual Pane)** با `F5`/`F6` برای کپی/انتقال بین پنل‌ها — اولویت اول این فاز
+### Phase 3 — Better than Finder (2–3 weeks)
+- [ ] **Dual pane mode** with `F5`/`F6` to copy/move between panes — top priority of this phase
 - [ ] **Tabs**
-- [ ] **Icon view** و **Column view**
-- [ ] **Quick Look** با Space و پنل Inspector
-- [ ] **محاسبه‌ی سایز پوشه‌ها** در List view
-- [ ] **جستجوی سریع** (فیلتر لحظه‌ای داخل پوشه + جستجوی Spotlight)
-- [ ] **Command Palette** (`⌘K`) برای همه‌ی دستورها
-- [ ] **Batch rename** (با الگو، شماره‌گذاری، regex)
-- [ ] میانبرهای کیبورد قابل تنظیم، ناوبری کامل با کیبورد (حتی Vim-style)
-- [ ] ترمینال جاسازی‌شده یا «Open Terminal Here»
-- [ ] نمایش فضای آزاد دیسک در status bar
+- [ ] **Icon view** and **Column view**
+- [ ] **Quick Look** with Space, plus an Inspector panel
+- [ ] **Folder size calculation** in List view
+- [ ] **Fast search** (instant in-folder filter + Spotlight search)
+- [ ] **Command Palette** (`⌘K`) for all commands
+- [ ] **Batch rename** (patterns, numbering, regex)
+- [ ] Customizable keyboard shortcuts, full keyboard navigation (optionally Vim-style)
+- [ ] Embedded terminal or "Open Terminal Here"
+- [ ] Free disk space shown in the status bar
 
-### فاز ۴ — قابلیت‌های پیشرفته (اختیاری)
-- [ ] فشرده‌سازی/باز کردن zip و غیره
-- [ ] Tags و رنگ‌ها (سازگار با تگ‌های Finder)
-- [ ] اتصال به سرور: SFTP / SMB / S3
-- [ ] مقایسه و همگام‌سازی پوشه‌ها
-- [ ] پیدا کردن فایل‌های تکراری و تحلیل فضای دیسک
-- [ ] Git status کنار فایل‌ها در پوشه‌های پروژه
-- [ ] تم‌ها، Dark mode، و پشتیبانی از نام‌های فارسی/راست‌چین
+### Phase 4 — Advanced Features (optional)
+- [ ] Compress/extract zip and other archives
+- [ ] Tags and colors (compatible with Finder tags)
+- [ ] Remote connections: SFTP / SMB / S3
+- [ ] Folder compare and sync
+- [ ] Duplicate file finder and disk usage analysis
+- [ ] Git status next to files in project folders
+- [ ] Themes and Dark Mode
 
-### فاز ۵ — پایداری و توزیع
-- [ ] تست روی پوشه‌های بزرگ (۱۰۰ هزار فایل)، پروفایل با Instruments
-- [ ] Code signing با Apple ID (یا اجرای محلی بدون امضا)
-- [ ] ساخت `.app`/`.dmg` در GitHub Releases
-- [ ] (اختیاری) آپدیت خودکار با Sparkle
-- [ ] (اختیاری) تنظیم به‌عنوان فایل منیجر پیش‌فرض برای «Reveal in Finder» تا جای ممکن
-
----
-
-## ۴. پیش‌نیازها برای تو
-1. یک مک با **Xcode** نصب‌شده (از App Store) — build و اجرای اپ macOS فقط روی مک ممکن است.
-2. Apple ID رایگان برای امضای محلی کافی است؛ عضویت پولی Developer Program فقط برای notarization و توزیع عمومی لازم است.
-3. کد را من در این ریپو می‌نویسم و push می‌کنم؛ تو روی مک `git pull` می‌کنی، در Xcode باز می‌کنی و `⌘R` می‌زنی. CI هم روی GitHub مطمئن می‌شود که build سالم است.
+### Phase 5 — Stability and Distribution
+- [ ] Test with large folders (100k files), profile with Instruments
+- [ ] Code signing with an Apple ID (or local unsigned runs)
+- [ ] Build `.app`/`.dmg` into GitHub Releases
+- [ ] (Optional) Auto-updates with Sparkle
+- [ ] (Optional) Act as the default handler for "Reveal in Finder" where possible
 
 ---
 
-## ۵. سؤال‌هایی که باید جواب بدهی
-1. ~~چه چیزی در Finder بیشتر از همه اذیتت می‌کند؟~~ ✅ کپی/کات/پیست سخت و پردردسر است → اولویت اول.
-2. ظاهر: شبیه Finder (بومی macOS) یا سبک Total Commander/Commander One (کیبوردمحور، دو پنله)؟
-3. نسخه‌ی macOS مک‌بوکت چیست؟ (برای تعیین حداقل نسخه)
-4. ~~نسخه‌ی iPhone/iPad هم می‌خواهی؟~~ ✅ نه، فقط مک‌بوک.
+## 4. Prerequisites
+1. A Mac with **Xcode** installed (from the App Store) — building and running a macOS app is only possible on a Mac.
+2. A free Apple ID is enough for local signing; the paid Developer Program is only needed for notarization and public distribution.
+3. Code is written and pushed to this repository; on the Mac you `git pull`, open it in Xcode and press `⌘R`. CI on GitHub verifies that the build stays green.
 
-بعد از جواب این سؤال‌ها، فاز ۰ و ۱ را شروع می‌کنیم.
+---
+
+## 5. Open Questions
+1. ~~What bothers you most about Finder?~~ ✅ Copy/cut/paste is awkward and frustrating → top priority.
+2. Look and feel: Finder-like (native macOS), or Total Commander / Commander One style (keyboard-driven, dual pane)?
+3. Which macOS version is your MacBook running? (determines the minimum deployment target)
+4. ~~Do you want an iPhone/iPad version?~~ ✅ No, MacBook only.
+
+Once these are answered, we start Phase 0 and Phase 1.

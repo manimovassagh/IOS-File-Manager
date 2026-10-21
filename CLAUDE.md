@@ -1,0 +1,10 @@
+# CLAUDE.md
+
+## Language
+- The user writes to Claude in Persian (Farsi) because it is easier for them.
+- Everything Claude produces must be in **English**: chat replies, code, comments, commit messages, docs, PR descriptions, and any file in this repository.
+- Never write Persian text anywhere.
+
+## Project
+A personal file manager for **macOS only** (replacement for Finder). See `PLAN.md` for the roadmap.
+Top priority: easy, reliable copy / cut / paste of files.
