@@ -8,3 +8,8 @@
 ## Project
 A personal file manager for **macOS only** (replacement for Finder). See `PLAN.md` for the roadmap.
 Top priority: easy, reliable copy / cut / paste of files.
+
+## Build & test
+- Swift package: `FileCore` (logic, no UI) + `FileManagerApp` (SwiftUI + AppKit executable).
+- `swift build`, `swift test`, `./scripts/build-app.sh` — macOS only.
+- Cloud sessions have no Swift toolchain; verify changes through the GitHub Actions CI (`.github/workflows/ci.yml`, macOS runner).

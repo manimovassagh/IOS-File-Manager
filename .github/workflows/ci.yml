@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+      - name: Build app bundle
+        run: ./scripts/build-app.sh
+
+      - name: Zip app
+        run: ditto -c -k --keepParent "build/File Manager.app" "build/File-Manager.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: File-Manager-app
+          path: build/File-Manager.zip

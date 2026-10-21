@@ -61,33 +61,36 @@ Principles:
 ## 3. Project Phases
 
 ### Phase 0 — Setup (1–2 days)
-- [ ] Create the Xcode project (macOS App) + a Swift Package named `FileCore`
-- [ ] `.gitignore`, README, SwiftLint/SwiftFormat
-- [ ] GitHub Actions for build and tests
+- [x] Swift package with the macOS app target + a `FileCore` library (open `Package.swift` in Xcode)
+- [x] `.gitignore`, README
+- [ ] SwiftLint/SwiftFormat
+- [x] GitHub Actions for build and tests
 - [ ] Disable Sandbox and verify Full Disk Access
 
 ### Phase 1 — MVP: Browsing + Copy/Cut/Paste (2–3 weeks)
-- [ ] Window with a **sidebar** (Home, Desktop, Downloads, Documents, Applications, mounted volumes)
-- [ ] **List view** with Name / Size / Kind / Date Modified columns, sortable by clicking a column
-- [ ] Navigation: double-click, Back/Forward, enclosing folder (`⌘↑`), **path bar**
-- [ ] Open files with the default app (`NSWorkspace`)
-- [ ] Show/hide hidden files (`⌘⇧.`)
-- [ ] Live updates via FSEvents
-- [ ] **Copy / Cut / Paste** (`⌘C` / `⌘X` / `⌘V`) with real Cut — the most important feature
-- [ ] Clipboard indicator at the bottom of the window (what is copied/cut + a cancel button)
-- [ ] Cut files shown dimmed so it's clear they will be moved
-- [ ] Name-conflict dialog (Replace / Keep Both / Skip, with "apply to all")
-- [ ] Undo for paste and move (`⌘Z`)
+- [x] Window with a **sidebar** (Home, Desktop, Downloads, Documents, Applications, mounted volumes)
+- [x] **List view** with Name / Size / Kind / Date Modified columns, sortable by clicking a column
+- [x] Navigation: double-click, Back/Forward, enclosing folder (`⌘↑`), **path bar**
+- [x] Open files with the default app (`NSWorkspace`)
+- [x] Show/hide hidden files (`⌘⇧.`)
+- [x] Live updates (directory watcher; switch to FSEvents later for deep changes)
+- [x] **Copy / Cut / Paste** (`⌘C` / `⌘X` / `⌘V`) with real Cut — the most important feature
+- [x] Clipboard indicator at the bottom of the window (what is copied/cut + a cancel button)
+- [x] Cut files shown dimmed so it's clear they will be moved
+- [x] Name-conflict dialog (Replace / Keep Both / Skip, with "apply to all")
+- [x] Undo for paste, move and trash (`⌘Z`)
 
 **Phase 1 deliverable:** an app you can open every day instead of Finder, where moving files around is easy.
 
 ### Phase 2 — File Operations (1–2 weeks)
 - [ ] New Folder, Rename (inline), Duplicate
-- [ ] Move to Trash, Delete Immediately (with confirmation)
+- [x] Move to Trash (`⌘⌫`, undoable)
+- [ ] Delete Immediately (with confirmation)
 - [ ] Drag & drop within the app and with other apps
 - [ ] Operation queue with a **progress bar**, pause and resume
 - [ ] Redo and full undo history
-- [ ] Context menu, Open With, Show in Terminal, Copy Path
+- [x] Context menu (Open, Copy, Cut, Paste, Move to Trash, Copy Path, Show in Finder)
+- [ ] Open With, Show in Terminal
 
 ### Phase 3 — Better than Finder (2–3 weeks)
 - [ ] **Dual pane mode** with `F5`/`F6` to copy/move between panes — top priority of this phase
