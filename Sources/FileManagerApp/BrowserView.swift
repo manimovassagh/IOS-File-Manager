@@ -76,6 +76,14 @@ struct BrowserView: View {
         .focusedSceneObject(model)
         .toolbar { toolbar }
         .tint(settings.accentColor)
+        .sheet(item: $model.destinationRequest) { request in
+            DestinationPicker(
+                request: request,
+                accent: settings.accentColor,
+                onChoose: { model.send(request, to: $0, undoManager: undoManager) },
+                onCancel: { model.destinationRequest = nil }
+            )
+        }
         .alert("Something went wrong", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
         } message: {

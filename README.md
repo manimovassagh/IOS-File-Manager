@@ -31,6 +31,8 @@ See [PLAN.md](PLAN.md) for the roadmap.
   (moves on the same disk, copies to another disk; hold `⌥` to copy, `⌘` to move)
 - Progress bar for multi-item copies/moves, with **Cancel**
 - New Folder (named inline right away), inline Rename (`F2`), Duplicate (`⌘D`)
+- **Move To… / Copy To…** (`⇧⌘M` / `⌥⌘C`): type part of a folder name or a path, press Return.
+  Recently used destinations come first; undoable, with a notice saying where the files went
 - Move to Trash (`⌘⌫`), Delete Immediately (`⌥⌘⌫`, asks first)
 - Undo (`⌘Z`) and Redo (`⇧⌘Z`) for paste, move, rename, new folder, duplicate and trash
 - Open With, Open in Terminal, Copy Path, Show in Finder
@@ -53,6 +55,7 @@ See [PLAN.md](PLAN.md) for the roadmap.
 | Enclosing folder | `⌘↑` |
 | Back / Forward | `⌘[` / `⌘]` |
 | Copy / Cut / Paste | `⌘C` / `⌘X` / `⌘V` |
+| Move To… / Copy To… | `⇧⌘M` / `⌥⌘C` |
 | Move to Trash | `⌘⌫` |
 | Delete Immediately | `⌥⌘⌫` |
 | Undo / Redo | `⌘Z` / `⇧⌘Z` |
