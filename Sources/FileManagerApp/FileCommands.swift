@@ -61,7 +61,7 @@ struct FileCommands: Commands {
             Button("Open in Terminal") {
                 model?.openTerminal()
             }
-            .keyboardShortcut("t", modifiers: [.command, .option])
+            .keyboardShortcut("t", modifiers: [.command, .control])
             .disabled(model == nil)
         }
 

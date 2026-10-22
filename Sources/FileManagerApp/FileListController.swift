@@ -34,6 +34,9 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     var onMoveRight: ((FileListController) -> Bool)?
 
     private(set) var items: [FileItem] = []
+    /// The selection the user made, kept even while a filter hides those rows, so clearing the
+    /// filter brings it back.
+    private var rememberedSelectionPaths: Set<String> = []
     private var cutPaths: Set<String> = []
     /// True while we change the table ourselves, so delegate callbacks don't write back into the model.
     private var isUpdating = false
@@ -128,7 +131,10 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         isUpdating = true
         defer { isUpdating = false }
 
-        let keepPaths = selectedPaths ?? Set(selectedItems.map(\.url.path))
+        let keepPaths = selectedPaths ?? rememberedSelectionPaths
+        if let selectedPaths {
+            rememberedSelectionPaths = selectedPaths
+        }
         if (newItems != items || newCutPaths != cutPaths) && renamingItem == nil {
             items = newItems
             cutPaths = newCutPaths
@@ -288,6 +294,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     func tableViewSelectionDidChange(_ notification: Notification) {
         tableView.refreshQuickLook()
         guard !isUpdating else { return }
+        rememberedSelectionPaths = Set(selectedItems.map(\.url.path))
         onSelectionChange?(self)
     }
 

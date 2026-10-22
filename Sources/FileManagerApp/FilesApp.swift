@@ -29,5 +29,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             ThemeSettings.shared.applyAppearance()
         }
+        TextEditingKeys.install()
     }
 }

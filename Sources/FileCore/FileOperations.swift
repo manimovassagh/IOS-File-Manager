@@ -50,6 +50,14 @@ public enum FileOperationError: LocalizedError, Equatable {
     }
 }
 
+/// Undo failed partway; `inverse` re-applies the steps that were undone before the failure.
+public struct PartialUndoError: LocalizedError {
+    public let inverse: OperationRecord
+    public let underlying: Error
+
+    public var errorDescription: String? { underlying.localizedDescription }
+}
+
 /// What an operation changed on disk, so it can be undone.
 public struct OperationRecord: Equatable, Sendable {
     public enum Step: Equatable, Sendable {
@@ -78,6 +86,21 @@ public struct OperationResult: Sendable {
     public internal(set) var failures: [Failure] = []
     /// True when the user chose `.stop` on a conflict or the task was cancelled.
     public internal(set) var stopped = false
+
+    /// For a cut: the sources that are now in the destination (moved, or already there).
+    public var movedSources: [URL] {
+        var moved: [URL] = []
+        var targets = Set<String>()
+        for step in record.steps {
+            if case .moved(let from, let to) = step {
+                moved.append(from)
+                targets.insert(to.path)
+            }
+        }
+        // Items that were already in the destination are reported as results without a move.
+        moved += resultURLs.filter { !targets.contains($0.path) }
+        return moved
+    }
 }
 
 /// Copy / move / rename / trash operations. Methods are `async` and run off the main thread.
@@ -131,7 +154,10 @@ public struct FileOperations: Sendable {
                         // Already here; nothing to move.
                         result.resultURLs.append(source)
                     case .copy:
-                        let target = Self.uniqueURL(for: source.lastPathComponent, in: destination, style: .copy)
+                        let target = Self.uniqueURL(
+                            for: source.lastPathComponent, in: destination, style: .copy,
+                            splitsExtension: !Self.isPlainFolder(source)
+                        )
                         try fileManager.copyItem(at: source, to: target)
                         result.record.steps.append(.created(at: target))
                         result.resultURLs.append(target)
@@ -148,7 +174,10 @@ public struct FileOperations: Sendable {
                         result.stopped = true
                         return result
                     case .keepBoth:
-                        target = Self.uniqueURL(for: source.lastPathComponent, in: destination, style: .numbered)
+                        target = Self.uniqueURL(
+                            for: source.lastPathComponent, in: destination, style: .numbered,
+                            splitsExtension: !Self.isPlainFolder(source)
+                        )
                     case .replace:
                         if Self.isSameOrDescendant(Self.canonical(source), of: Self.canonical(target)) {
                             result.failures.append(.init(
@@ -205,7 +234,7 @@ public struct FileOperations: Sendable {
         guard Self.isValidName(name) else { throw FileOperationError.invalidName(name) }
         var target = directory.standardizedFileURL.appendingPathComponent(name)
         if Self.itemExists(at: target) {
-            target = Self.uniqueURL(for: name, in: directory.standardizedFileURL, style: .numbered)
+            target = Self.uniqueURL(for: name, in: directory.standardizedFileURL, style: .numbered, splitsExtension: false)
         }
         try fileManager.createDirectory(at: target, withIntermediateDirectories: false)
         var record = OperationRecord()
@@ -245,26 +274,36 @@ public struct FileOperations: Sendable {
     /// Reverts the steps of `record`, newest first.
     ///
     /// Returns the inverse record: undoing it re-applies `record` (that's how Redo works).
+    /// If a step fails, throws `PartialUndoError` carrying the inverse of the steps that *were*
+    /// undone, so they can still be redone.
     @discardableResult
     public func undo(_ record: OperationRecord) async throws -> OperationRecord {
         var inverse = OperationRecord()
         for step in record.steps.reversed() {
-            switch step {
-            case .created(let url):
-                var trashed: NSURL?
-                try fileManager.trashItem(at: url, resultingItemURL: &trashed)
-                if let trashed = trashed as URL? {
-                    inverse.steps.append(.trashed(original: url, trashLocation: trashed))
-                }
-            case .moved(let from, let to):
-                try moveItem(at: to, to: from)
-                inverse.steps.append(.moved(from: to, to: from))
-            case .trashed(let original, let trashLocation):
-                try moveItem(at: trashLocation, to: original)
-                inverse.steps.append(.created(at: original))
+            do {
+                try undo(step, into: &inverse)
+            } catch {
+                throw PartialUndoError(inverse: inverse, underlying: error)
             }
         }
         return inverse
+    }
+
+    private func undo(_ step: OperationRecord.Step, into inverse: inout OperationRecord) throws {
+        switch step {
+        case .created(let url):
+            var trashed: NSURL?
+            try fileManager.trashItem(at: url, resultingItemURL: &trashed)
+            if let trashed = trashed as URL? {
+                inverse.steps.append(.trashed(original: url, trashLocation: trashed))
+            }
+        case .moved(let from, let to):
+            try moveItem(at: to, to: from)
+            inverse.steps.append(.moved(from: to, to: from))
+        case .trashed(let original, let trashLocation):
+            try moveItem(at: trashLocation, to: original)
+            inverse.steps.append(.created(at: original))
+        }
     }
 
     // MARK: - Helpers
@@ -287,9 +326,10 @@ public struct FileOperations: Sendable {
     }
 
     /// Returns a URL in `directory` based on `name` that doesn't exist yet.
-    public static func uniqueURL(for name: String, in directory: URL, style: NamingStyle) -> URL {
-        let ext = (name as NSString).pathExtension
-        var base = (name as NSString).deletingPathExtension
+    /// `splitsExtension` is false for plain folders, whose dots aren't extensions ("v1.2" → "v1.2 copy").
+    public static func uniqueURL(for name: String, in directory: URL, style: NamingStyle, splitsExtension: Bool = true) -> URL {
+        let ext = splitsExtension ? (name as NSString).pathExtension : ""
+        let base = splitsExtension ? (name as NSString).deletingPathExtension : name
         func fileName(_ base: String) -> String { ext.isEmpty ? base : "\(base).\(ext)" }
         func isFree(_ name: String) -> Bool { !itemExists(at: directory.appendingPathComponent(name)) }
 
@@ -303,13 +343,9 @@ public struct FileOperations: Sendable {
                 number += 1
             }
         case .numbered:
+            // Like Finder, always number after the whole name: "Report 2024.pdf" → "Report 2024 2.pdf"
+            // (treating "2024" as a counter would turn it into "Report 2025.pdf", a different-looking file).
             var number = 2
-            // "file 2" continues as "file 3" rather than "file 2 2".
-            if let range = base.range(of: #" \d+$"#, options: .regularExpression),
-               let existing = Int(base[range].dropFirst()) {
-                base = String(base[..<range.lowerBound])
-                number = existing + 1
-            }
             candidate = fileName("\(base) \(number)")
             while !isFree(candidate) {
                 number += 1
@@ -317,6 +353,12 @@ public struct FileOperations: Sendable {
             }
         }
         return directory.appendingPathComponent(candidate)
+    }
+
+    /// A folder that isn't a package (an `.app` or similar bundle is treated like a file).
+    static func isPlainFolder(_ url: URL) -> Bool {
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+        return values?.isDirectory == true && values?.isPackage != true
     }
 
     public static func isValidName(_ name: String) -> Bool {

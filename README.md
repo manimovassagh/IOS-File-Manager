@@ -54,7 +54,7 @@ See [PLAN.md](PLAN.md) for the roadmap.
 | Move to Trash | `⌘⌫` |
 | Delete Immediately | `⌥⌘⌫` |
 | Undo / Redo | `⌘Z` / `⇧⌘Z` |
-| Open in Terminal | `⌥⌘T` |
+| Open in Terminal | `⌃⌘T` |
 | Show hidden files | `⇧⌘.` |
 
 ## Requirements
