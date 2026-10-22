@@ -134,6 +134,14 @@ final class BrowserModel: ObservableObject {
     var canGoForward: Bool { !forwardStack.isEmpty }
     var canGoUp: Bool { location.kind == .folder && currentURL.standardizedFileURL.path != "/" }
     var selectedItems: [FileItem] { items.filter { selection.contains($0.url) } }
+
+    /// What "Add to Sidebar" adds: the selected folders, or else the folder being shown.
+    var foldersForSidebar: [URL] {
+        let folders = selectedItems.filter(\.isBrowsable).map(\.browseURL)
+        if !folders.isEmpty { return folders }
+        return location.kind == .folder ? [currentURL] : []
+    }
+
     var acceptsNewItems: Bool { location.acceptsNewItems || !isAtBase }
     /// Paste is allowed while another copy runs: it's queued and runs afterwards.
     var canPaste: Bool { clipboard.contents != nil && acceptsNewItems }
