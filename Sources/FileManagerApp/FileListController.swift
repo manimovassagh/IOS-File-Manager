@@ -273,14 +273,14 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         cell.representedPath = item.url.path
         let size = rowSize.iconSize
         let thumbnails = ThumbnailCache.shared
-        if let cached = thumbnails.cachedThumbnail(for: item.url, size: size, modified: item.dateModified) {
+        if let cached = thumbnails.cachedRowThumbnail(for: item.url, size: size, modified: item.dateModified) {
             cell.imageView?.image = cached
             return
         }
         cell.imageView?.image = NSWorkspace.shared.icon(forFile: item.url.path)
         guard !item.isDirectory, ThumbnailCache.supportsThumbnail(item.url) else { return }
-        thumbnails.loadThumbnail(for: item.url, size: size, modified: item.dateModified) { [weak cell] image in
-            guard let cell, cell.representedPath == item.url.path else { return }
+        thumbnails.loadThumbnail(for: item.url, size: size, modified: item.dateModified, framed: true) { [weak cell] image in
+            guard let image, let cell, cell.representedPath == item.url.path else { return }
             cell.imageView?.image = image
         }
     }

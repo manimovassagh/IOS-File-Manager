@@ -2,7 +2,6 @@ import AppKit
 import CoreServices
 import FileCore
 import ImageIO
-import QuickLookThumbnailing
 import SwiftUI
 
 /// Large thumbnail and details for one file (column view's last pane and the list view's inspector).
@@ -117,6 +116,8 @@ struct FilePreview: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                // A hairline border keeps white or transparent images visible on light backgrounds.
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
                 .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
         } else {
             Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
@@ -196,22 +197,23 @@ struct FileDetails: Sendable {
 final class PreviewLoader: ObservableObject {
     @Published private(set) var thumbnail: NSImage?
     @Published private(set) var details: FileDetails?
+    /// The file being loaded. Results for any other file (a previous selection that finished
+    /// late) are dropped, so they can't overwrite the current preview.
+    private(set) var currentURL: URL?
+
+    /// Large enough to stay sharp when the preview fills a big window.
+    static let imageSize: CGFloat = 1600
 
     func load(_ url: URL) async {
+        currentURL = url
         thumbnail = nil
         details = nil
-        details = await Task.detached(priority: .userInitiated) { FileDetails(url: url) }.value
+        let loadedDetails = await Task.detached(priority: .userInitiated) { FileDetails(url: url) }.value
+        guard currentURL == url else { return }
+        details = loadedDetails
 
-        let request = QLThumbnailGenerator.Request(
-            fileAt: url,
-            // Large enough to stay sharp when the preview fills a big window.
-            size: CGSize(width: 1600, height: 1200),
-            scale: NSScreen.main?.backingScaleFactor ?? 2,
-            representationTypes: .thumbnail
-        )
-        if let representation = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) {
-            guard !Task.isCancelled else { return }
-            thumbnail = representation.nsImage
-        }
+        let image = await ThumbnailCache.shared.thumbnail(for: url, size: Self.imageSize, modified: loadedDetails.modified)
+        guard currentURL == url else { return }
+        thumbnail = image
     }
 }
