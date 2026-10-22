@@ -121,7 +121,7 @@ final class BrowserEndToEndTests: XCTestCase {
         let size = RowSize.thumbnails.iconSize
         XCTAssertTrue(
             wait(pump, timeout: 20) {
-                ThumbnailCache.shared.cachedThumbnail(for: item.url, size: size, modified: item.dateModified) != nil
+                ThumbnailCache.shared.cachedRowThumbnail(for: item.url, size: size, modified: item.dateModified) != nil
             },
             "No thumbnail was generated"
         )
@@ -188,6 +188,72 @@ final class BrowserEndToEndTests: XCTestCase {
             window?.close()
         }
         UserDefaults.standard.removeObject(forKey: "viewMode")
+    }
+
+    // MARK: - Thumbnails of light, dark and transparent images
+
+    /// Reported: previews of white PNGs sometimes didn't show (dark ones did). Every kind of image
+    /// must produce a thumbnail with its real content, for list rows and for the large preview.
+    @MainActor
+    func testThumbnailsForWhiteDarkAndTransparentImages() throws {
+        let folder = root.appendingPathComponent("Images", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let images: [(name: String, color: NSColor, expectedBrightness: ClosedRange<CGFloat>)] = [
+            ("white.png", .white, 0.9...1.0),
+            ("almost-white-document.png", NSColor(white: 0.97, alpha: 1), 0.85...1.0),
+            ("transparent.png", .clear, 0...1),
+            ("dark.png", NSColor(white: 0.08, alpha: 1), 0...0.2),
+        ]
+        for image in images {
+            try Self.writePNG(to: folder.appendingPathComponent(image.name), color: image.color, label: "", size: NSSize(width: 3360, height: 2100))
+        }
+        let model = BrowserModel(clipboard: ClipboardController(), start: .folder(folder))
+        let coordinator = FileTableView.Coordinator(model: model)
+        show(coordinator.list.scrollView)
+        let pump = { coordinator.update(settings: .shared, cutPaths: []) }
+        XCTAssertTrue(wait(pump) { coordinator.list.items.count == images.count })
+
+        let rowSize = RowSize.regular.iconSize
+        for item in coordinator.list.items {
+            let expected = try XCTUnwrap(images.first { $0.name == item.name })
+            // List row thumbnail (framed).
+            XCTAssertTrue(wait(pump, timeout: 15) {
+                ThumbnailCache.shared.cachedRowThumbnail(for: item.url, size: rowSize, modified: item.dateModified) != nil
+            }, "No row thumbnail for \(item.name)")
+
+            // Large preview image, loaded the way the preview pane does.
+            let loader = PreviewLoader()
+            let done = expectation(description: item.name)
+            Task { @MainActor in
+                await loader.load(item.url)
+                done.fulfill()
+            }
+            wait(for: [done], timeout: 20)
+            let preview = try XCTUnwrap(loader.thumbnail, "No preview image for \(item.name)")
+            XCTAssertGreaterThan(preview.size.width, 1000, "\(item.name): preview too small")
+            if item.name != "transparent.png" {
+                let brightness = try XCTUnwrap(Self.averageBrightness(of: preview))
+                XCTAssertTrue(expected.expectedBrightness.contains(brightness), "\(item.name): brightness \(brightness)")
+            }
+        }
+
+        // Rapidly switching files: the preview must end up showing the last one.
+        let loader = PreviewLoader()
+        let urls = coordinator.list.items.map(\.url)
+        let finished = expectation(description: "switching")
+        finished.expectedFulfillmentCount = urls.count
+        for url in urls {
+            Task { @MainActor in
+                await loader.load(url)
+                finished.fulfill()
+            }
+        }
+        wait(for: [finished], timeout: 30)
+        XCTAssertEqual(loader.currentURL, urls.last)
+        XCTAssertNotNil(loader.thumbnail)
+
+        coordinator.list.tableView.selectRowIndexes([0], byExtendingSelection: false)
+        snapshot("thumbnails-light-dark-transparent")
     }
 
     // MARK: - Themes
@@ -391,15 +457,32 @@ final class BrowserEndToEndTests: XCTestCase {
         try? bitmap.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("\(name)-drawn.png"))
     }
 
-    private static func writePNG(to url: URL, color: NSColor, label: String) throws {
+    /// Average brightness (0…1) of an image's opaque content.
+    private static func averageBrightness(of image: NSImage) -> CGFloat? {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        var total: CGFloat = 0
+        var count: CGFloat = 0
+        let step = max(1, min(rep.pixelsWide, rep.pixelsHigh) / 20)
+        for x in stride(from: 0, to: rep.pixelsWide, by: step) {
+            for y in stride(from: 0, to: rep.pixelsHigh, by: step) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.5 else { continue }
+                total += (color.redComponent + color.greenComponent + color.blueComponent) / 3
+                count += 1
+            }
+        }
+        return count > 0 ? total / count : nil
+    }
+
+    private static func writePNG(to url: URL, color: NSColor, label: String, size: NSSize = NSSize(width: 320, height: 200)) throws {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 200, bitsPerSample: 8, samplesPerPixel: 4,
+            bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height), bitsPerSample: 8, samplesPerPixel: 4,
             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
         ))
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
         color.setFill()
-        NSRect(x: 0, y: 0, width: 320, height: 200).fill()
+        NSRect(origin: .zero, size: size).fill()
         (label as NSString).draw(at: NSPoint(x: 20, y: 80), withAttributes: [
             .font: NSFont.boldSystemFont(ofSize: 48), .foregroundColor: NSColor.white,
         ])
