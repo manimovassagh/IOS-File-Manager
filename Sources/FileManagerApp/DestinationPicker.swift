@@ -169,16 +169,22 @@ struct DestinationPicker: View {
     let onChoose: (URL) -> Void
     let onCancel: () -> Void
 
+    /// `history` and `favorites` default to the saved ones (passed in by tests).
     @MainActor
     init(
         request: DestinationRequest,
-        history: DestinationHistory = DestinationHistoryStore.shared.history,
-        favorites: [URL] = FavoritesStore.shared.items.compactMap(\.folderURL),
+        history: DestinationHistory? = nil,
+        favorites: [URL]? = nil,
         accent: Color,
         onChoose: @escaping (URL) -> Void,
         onCancel: @escaping () -> Void
     ) {
-        _model = StateObject(wrappedValue: DestinationPickerModel(request: request, history: history, favorites: favorites))
+        let model = DestinationPickerModel(
+            request: request,
+            history: history ?? DestinationHistoryStore.shared.history,
+            favorites: favorites ?? FavoritesStore.shared.items.compactMap(\.folderURL)
+        )
+        _model = StateObject(wrappedValue: model)
         self.accent = accent
         self.onChoose = onChoose
         self.onCancel = onCancel

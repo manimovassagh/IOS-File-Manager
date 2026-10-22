@@ -10,10 +10,10 @@ struct BrowserView: View {
     @Environment(\.undoManager) private var undoManager
 
     @MainActor
-    init(clipboard: ClipboardController, settings: ThemeSettings, favorites: FavoritesStore = .shared) {
+    init(clipboard: ClipboardController, settings: ThemeSettings, favorites: FavoritesStore? = nil) {
         self.clipboard = clipboard
         self.settings = settings
-        self.favorites = favorites
+        self.favorites = favorites ?? .shared
         _model = StateObject(wrappedValue: BrowserModel(clipboard: clipboard))
     }
 
