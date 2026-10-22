@@ -221,6 +221,9 @@ final class ColumnBrowserController {
     private var filterText = ""
     private var cutPaths: Set<String> = []
     private var settings = ThemeSettings.shared
+    /// What was last pushed from the model into the focused column, to skip needless re-sorting.
+    private var pushedItemsVersion = -1
+    private var pushedSelection: Set<URL> = []
 
     init(model: BrowserModel) {
         self.model = model
@@ -244,17 +247,35 @@ final class ColumnBrowserController {
             columns.forEach(load)
         } else if displayChanged {
             columns.forEach { redisplay($0) }
+            if filterText.isEmpty, columns.indices.contains(focusedIndex) {
+                // The filter was cleared and the columns got their selections back: tell the model.
+                let focused = columns[focusedIndex]
+                DispatchQueue.main.async { [weak self] in
+                    self?.model.focusColumn(folder: focused.folder, items: focused.allItems, selection: focused.list.selectedURLs)
+                }
+            }
         }
         columns.forEach(applySettings)
         hostView.applyBackground(settings.palette?.background)
 
         // The model reloads the focused folder after paste, rename, etc.; show its result.
+        // Only when the items or selection actually changed: `update` also runs for every progress
+        // tick, and re-sorting a huge folder each time would be slow.
         if columns.indices.contains(focusedIndex), !model.isLoading {
             let focused = columns[focusedIndex]
-            if focused.folder.standardizedFileURL.path == model.currentURL.standardizedFileURL.path {
+            let changed = model.itemsVersion != pushedItemsVersion || model.selection != pushedSelection
+            if changed, focused.folder.standardizedFileURL.path == model.currentURL.standardizedFileURL.path {
+                pushedItemsVersion = model.itemsVersion
+                pushedSelection = model.selection
                 focused.allItems = model.allItems
-                redisplay(focused, selectedPaths: Set(model.selection.map(\.path)))
-                syncColumns(after: focusedIndex)
+                if filterText.isEmpty {
+                    redisplay(focused, selectedPaths: Set(model.selection.map(\.path)))
+                    syncColumns(after: focusedIndex)
+                } else {
+                    // While filtering, the model's selection only holds visible items; keep the
+                    // column's own selection so clearing the filter restores it.
+                    redisplay(focused)
+                }
             }
             focused.list.handleRenameRequest(model.renameRequest)
         }
@@ -319,7 +340,16 @@ final class ColumnBrowserController {
         let generation = column.generation
         let includeHidden = showHidden
         Task {
-            let loaded = (try? await ItemLoader.load(column.source, includeHidden: includeHidden)) ?? []
+            let loaded: [FileItem]
+            do {
+                loaded = try await ItemLoader.load(column.source, includeHidden: includeHidden)
+            } catch {
+                // Say why the column is empty (e.g. no permission) instead of showing nothing.
+                if generation == 1 {
+                    model.errorMessage = "“\(column.folder.lastPathComponent)” can’t be opened: \(error.localizedDescription)"
+                }
+                loaded = []
+            }
             guard generation == column.generation, let index = columns.firstIndex(where: { $0 === column }) else { return }
             column.allItems = loaded
             redisplay(column)
@@ -365,9 +395,19 @@ final class ColumnBrowserController {
         guard columns.count > index + 1 else { return }
         columns.removeSubrange((index + 1)...)
         if focusedIndex > index {
+            // The focused column was removed (e.g. its folder was renamed or trashed elsewhere):
+            // move focus, and the model's current folder (where paste goes), to the last column left.
             focusedIndex = index
+            DispatchQueue.main.async { [weak self] in self?.refocusAfterTruncation() }
         }
         layoutPanes()
+    }
+
+    private func refocusAfterTruncation() {
+        guard columns.indices.contains(focusedIndex) else { return }
+        let column = columns[focusedIndex]
+        model.focusColumn(folder: column.folder, items: column.allItems, selection: column.list.selectedURLs)
+        column.list.focus()
     }
 
     private func showPreview(_ item: FileItem) {

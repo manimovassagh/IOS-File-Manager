@@ -348,6 +348,103 @@ final class BrowserEndToEndTests: XCTestCase {
         XCTAssertEqual(Location.lastUsed, .screenshots)
     }
 
+    // MARK: - Bug fixes (#34–#48)
+
+    /// #34: visiting Recents/Screenshots used to switch every folder to "newest first".
+    @MainActor
+    func testVisitingScreenshotsDoesNotChangeFolderSort() {
+        let model = BrowserModel(clipboard: ClipboardController(), start: .folder(root))
+        XCTAssertEqual(model.sort, FileSort())
+        model.navigate(to: .screenshots)
+        XCTAssertEqual(model.sort.key, .dateModified)
+        model.navigate(to: root.appendingPathComponent("Documents"))
+        XCTAssertEqual(model.sort, FileSort(), "Folders must still sort by name")
+    }
+
+    /// #36: Duplicate in Recents must copy each file within its own folder.
+    @MainActor
+    func testDuplicateGroupsFilesByTheirFolder() {
+        let a = URL(fileURLWithPath: "/tmp/one/a.txt")
+        let b = URL(fileURLWithPath: "/tmp/two/b.txt")
+        let c = URL(fileURLWithPath: "/tmp/one/c.txt")
+        let groups = BrowserModel.groupedByFolder([a, b, c])
+        XCTAssertEqual(groups.map(\.folder.lastPathComponent), ["one", "two"])
+        XCTAssertEqual(groups.map { $0.urls.map(\.lastPathComponent) }, [["a.txt", "c.txt"], ["b.txt"]])
+    }
+
+    /// #44: after a partly failed cut-paste, only the items that didn't move stay on the clipboard.
+    @MainActor
+    func testPartialCutKeepsOnlyUnmovedItems() {
+        let clipboard = ClipboardController()
+        let moved = root.appendingPathComponent("notes.txt")
+        let failed = root.appendingPathComponent("photo.png")
+        clipboard.set([moved, failed], mode: .cut)
+        clipboard.didMove([moved])
+        XCTAssertEqual(clipboard.contents?.urls.map(\.lastPathComponent), ["photo.png"])
+        XCTAssertEqual(clipboard.contents?.mode, .cut)
+        clipboard.didMove([failed])
+        XCTAssertNil(clipboard.contents)
+    }
+
+    /// #45: writing to the pasteboard elsewhere in the app (Copy Image in the preview) updates the bar.
+    @MainActor
+    func testClipboardBarUpdatesAfterAppPasteboardWrite() {
+        let clipboard = ClipboardController()
+        clipboard.set([root.appendingPathComponent("notes.txt")], mode: .copy)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([NSImage(size: NSSize(width: 4, height: 4))])
+        NotificationCenter.default.post(name: .pasteboardChangedByApp, object: nil)
+        XCTAssertNil(clipboard.contents, "The bar should no longer offer the old files")
+    }
+
+    /// #37: when the focused column disappears (its folder was removed elsewhere), paste must target
+    /// the remaining column's folder, not the removed one.
+    @MainActor
+    func testRemovedColumnMovesFocusBack() throws {
+        let model = BrowserModel(clipboard: ClipboardController(), start: .folder(root))
+        model.viewMode = .columns
+        let controller = ColumnBrowserController(model: model)
+        show(controller.hostView)
+        let pump = { controller.update(settings: .shared, cutPaths: []) }
+        XCTAssertTrue(wait(pump) { controller.columns.first?.list.items.count == 4 })
+        let rootColumn = controller.columns[0]
+        let folderRow = try XCTUnwrap(rootColumn.list.items.firstIndex { $0.name == "Documents" })
+        rootColumn.list.tableView.selectRowIndexes([folderRow], byExtendingSelection: false)
+        XCTAssertTrue(wait(pump) { controller.columns.count == 2 && controller.columns[1].list.items.count == 1 })
+        controller.columns[1].list.tableView.selectRowIndexes([0], byExtendingSelection: false)
+        XCTAssertTrue(wait(pump) { model.currentURL.lastPathComponent == "Documents" })
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("Documents"))
+
+        XCTAssertTrue(wait(pump) { controller.columns.count == 1 }, "The removed folder's column should close")
+        XCTAssertTrue(wait(pump) { model.currentURL.standardizedFileURL.path == self.root.standardizedFileURL.path },
+                      "Paste would still go to the removed folder: \(model.currentURL.path)")
+    }
+
+    /// #38: filtering must not lose the folder selected in an earlier column.
+    @MainActor
+    func testFilterKeepsColumnSelection() throws {
+        let model = BrowserModel(clipboard: ClipboardController(), start: .folder(root))
+        model.viewMode = .columns
+        let controller = ColumnBrowserController(model: model)
+        show(controller.hostView)
+        let pump = { controller.update(settings: .shared, cutPaths: []) }
+        XCTAssertTrue(wait(pump) { controller.columns.first?.list.items.count == 4 })
+        let rootColumn = controller.columns[0]
+        let folderRow = try XCTUnwrap(rootColumn.list.items.firstIndex { $0.name == "Documents" })
+        rootColumn.list.tableView.selectRowIndexes([folderRow], byExtendingSelection: false)
+        XCTAssertTrue(wait(pump) { controller.columns.count == 2 })
+
+        model.filterText = "zzz"
+        wait(pump, timeout: 0.5) { false }
+        model.filterText = ""
+        wait(pump, timeout: 0.5) { false }
+
+        XCTAssertEqual(rootColumn.list.selectedItems.map(\.name), ["Documents"], "Selection was lost by filtering")
+        XCTAssertEqual(controller.columns.count, 2)
+        XCTAssertTrue(wait(pump) { model.selection.map(\.lastPathComponent) == ["Documents"] })
+    }
+
     // MARK: - Helpers
 
     /// The preview is the last pane and fills the space after the columns.

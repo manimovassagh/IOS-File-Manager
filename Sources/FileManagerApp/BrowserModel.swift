@@ -24,7 +24,11 @@ final class BrowserModel: ObservableObject {
     @Published private(set) var currentURL: URL
     /// Items shown: `allItems` sorted and filtered.
     @Published private(set) var items: [FileItem] = []
-    @Published private(set) var allItems: [FileItem] = []
+    @Published private(set) var allItems: [FileItem] = [] {
+        didSet { itemsVersion &+= 1 }
+    }
+    /// Bumped whenever `allItems` is replaced, so views can tell cheaply whether to redisplay.
+    private(set) var itemsVersion = 0
     @Published var selection: Set<URL> = []
     @Published var sort: FileSort {
         didSet {
@@ -235,11 +239,12 @@ final class BrowserModel: ObservableObject {
     }
 
     private func load(_ newLocation: Location, selecting paths: Set<String> = []) {
-        if newLocation.kind != location.kind {
-            sorts[location.kind] = sort
+        let previousKind = location.kind
+        // Switch `location` before `sort`: the sort's didSet stores it under the current location's kind.
+        location = newLocation
+        if newLocation.kind != previousKind {
             sort = sorts[newLocation.kind] ?? newLocation.kind.defaultSort
         }
-        location = newLocation
         newLocation.remember()
         showInspector = inspectorPreference[newLocation.kind] ?? false
         baseURL = newLocation.baseURL
@@ -315,6 +320,13 @@ final class BrowserModel: ObservableObject {
         }
     }
 
+    private func replaceItem(at oldURL: URL, with newURL: URL) {
+        guard let renamed = try? FileItem(url: newURL) else { return reload() }
+        allItems = allItems.map { $0.url.path == oldURL.path ? renamed : $0 }
+        applyFilterAndSort()
+        selection = [renamed.url]
+    }
+
     private func applyFilterAndSort() {
         items = Self.arrange(allItems, sort: effectiveSort, filter: filterText)
         let visible = Set(items.map(\.url))
@@ -360,17 +372,33 @@ final class BrowserModel: ObservableObject {
             contents.urls, into: currentURL, mode: contents.mode,
             actionName: contents.mode == .cut ? "Move" : "Copy",
             undoManager: undoManager,
-            onSuccess: { [clipboard] in
-                if contents.mode == .cut { clipboard.didPaste() }
+            onFinished: { [clipboard] result in
+                // Even after a partial move (a failure, or Stop), forget the items that did move.
+                if contents.mode == .cut { clipboard.didMove(result.movedSources) }
             }
         )
     }
 
     /// Makes copies of the selection next to the originals ("file copy.txt").
+    /// In Recents the selection can span several folders: each file is duplicated in its own folder.
     func duplicateSelection(undoManager: UndoManager?) {
-        let urls = selectedItems.map(\.url)
-        guard !urls.isEmpty, let folder = urls.first?.deletingLastPathComponent() else { return }
-        transfer(urls, into: folder, mode: .copy, actionName: "Duplicate", undoManager: undoManager)
+        for (folder, urls) in Self.groupedByFolder(selectedItems.map(\.url)) {
+            transfer(urls, into: folder, mode: .copy, actionName: "Duplicate", undoManager: undoManager)
+        }
+    }
+
+    /// `urls` grouped by the folder they're in, in the order the folders first appear.
+    static func groupedByFolder(_ urls: [URL]) -> [(folder: URL, urls: [URL])] {
+        var groups: [(folder: URL, urls: [URL])] = []
+        for url in urls {
+            let folder = url.deletingLastPathComponent().standardizedFileURL
+            if let index = groups.firstIndex(where: { $0.folder.path == folder.path }) {
+                groups[index].urls.append(url)
+            } else {
+                groups.append((folder, [url]))
+            }
+        }
+        return groups
     }
 
     /// Handles files dropped onto a list or onto a folder in it.
@@ -389,12 +417,12 @@ final class BrowserModel: ObservableObject {
         mode: FileClipboard.Mode,
         actionName: String,
         undoManager: UndoManager?,
-        onSuccess: @escaping () -> Void = {}
+        onFinished: @escaping (OperationResult) -> Void = { _ in }
     ) {
         guard !urls.isEmpty else { return }
         guard !isBusy else {
             enqueue { [weak self] in
-                self?.transfer(urls, into: destination, mode: mode, actionName: actionName, undoManager: undoManager, onSuccess: onSuccess)
+                self?.transfer(urls, into: destination, mode: mode, actionName: actionName, undoManager: undoManager, onFinished: onFinished)
             }
             return
         }
@@ -416,9 +444,7 @@ final class BrowserModel: ObservableObject {
                     onConflict: { await prompt.resolve($0) },
                     onProgress: { progress in await self.updateProgress(progress) }
                 )
-                if result.failures.isEmpty, !result.stopped {
-                    onSuccess()
-                }
+                onFinished(result)
                 registerUndo(result.record, actionName: actionName, undoManager: undoManager)
                 report(result.failures, verb: mode == .cut ? "moved" : "copied")
                 if destination.standardizedFileURL.path == currentURL.standardizedFileURL.path {
@@ -477,7 +503,12 @@ final class BrowserModel: ObservableObject {
             do {
                 let (newURL, record) = try await operations.rename(url, to: name)
                 registerUndo(record, actionName: "Rename", undoManager: undoManager)
-                reload(selecting: [newURL.path])
+                if itemSource(for: currentURL) == .recents {
+                    // Spotlight still knows the old path (and not yet the new one): update the list directly.
+                    replaceItem(at: url, with: newURL)
+                } else {
+                    reload(selecting: [newURL.path])
+                }
             } catch {
                 errorMessage = error.localizedDescription
                 reload()
@@ -585,8 +616,16 @@ final class BrowserModel: ObservableObject {
         let manager = WeakUndoManager(undoManager)
         undoManager.registerUndo(withTarget: self) { model in
             MainActor.assumeIsolated {
-                guard let undoManager = manager.value, let record = inverse.record else { return }
-                model.revert(record, actionName: actionName, undoManager: undoManager)
+                guard let undoManager = manager.value else { return }
+                if let record = inverse.record {
+                    model.revert(record, actionName: actionName, undoManager: undoManager)
+                } else {
+                    // Redo pressed while the undo is still running (e.g. a big move between disks):
+                    // run it as soon as the undo finishes instead of dropping it.
+                    inverse.whenReady = { [weak model] record in
+                        model?.revert(record, actionName: actionName, undoManager: undoManager)
+                    }
+                }
             }
         }
         undoManager.setActionName(actionName)
@@ -594,10 +633,18 @@ final class BrowserModel: ObservableObject {
         Task {
             do {
                 inverse.record = try await operations.undo(record)
+            } catch let error as PartialUndoError {
+                // Keep what was undone redoable, even though the rest failed.
+                inverse.record = error.inverse
+                errorMessage = "Couldn’t undo everything: \(error.localizedDescription)"
             } catch {
                 errorMessage = "Couldn’t undo: \(error.localizedDescription)"
             }
             reload()
+            if let record = inverse.record, let whenReady = inverse.whenReady {
+                inverse.whenReady = nil
+                whenReady(record)
+            }
         }
     }
 
@@ -612,6 +659,8 @@ final class BrowserModel: ObservableObject {
 @MainActor
 private final class RecordBox {
     var record: OperationRecord?
+    /// A redo that was requested before `record` was known.
+    var whenReady: ((OperationRecord) -> Void)?
 }
 
 /// Lets undo handlers refer back to their undo manager without a retain cycle.

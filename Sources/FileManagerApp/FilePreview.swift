@@ -18,6 +18,8 @@ struct FilePreview: View {
         }
         .themeBackground(settings.palette?.background)
         .themeForeground(settings.palette?.text)
+        // Set here too: in column view the preview is hosted outside BrowserView's tint.
+        .tint(settings.accentColor)
         .task(id: item.url) {
             await loader.load(item.url)
         }
@@ -99,6 +101,7 @@ struct FilePreview: View {
         guard let image = NSImage(contentsOf: item.url) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([image])
+        NotificationCenter.default.post(name: .pasteboardChangedByApp, object: nil)
     }
 
     /// The preview image; drag it into another app (chat, browser, email) to share the file.

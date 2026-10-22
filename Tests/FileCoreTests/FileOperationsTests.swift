@@ -381,10 +381,35 @@ final class FileOperationsTests: XCTestCase {
 
     // MARK: - Naming
 
-    func testNumberedNameContinuesExistingNumber() throws {
+    func testNumberedNameKeepsNumbersThatArePartOfTheName() throws {
+        // A year or number in the name isn't a counter: "Report 2024" must not become "Report 2025".
+        try makeFile("Report 2024.pdf")
+        XCTAssertEqual(FileOperations.uniqueURL(for: "Report 2024.pdf", in: root, style: .numbered).lastPathComponent, "Report 2024 2.pdf")
         try makeFile("file 2.txt")
-        let unique = FileOperations.uniqueURL(for: "file 2.txt", in: root, style: .numbered)
-        XCTAssertEqual(unique.lastPathComponent, "file 3.txt")
+        XCTAssertEqual(FileOperations.uniqueURL(for: "file 2.txt", in: root, style: .numbered).lastPathComponent, "file 2 2.txt")
+    }
+
+    func testDuplicatingAFolderWithADotKeepsItsName() async throws {
+        let folder = try makeDirectory("v1.2")
+        _ = try await operations.paste([folder], into: root, mode: .copy, onConflict: Self.noConflictExpected)
+        XCTAssertTrue(exists("v1.2 copy"), "Expected \"v1.2 copy\", not \"v1 copy.2\"")
+    }
+
+    func testFailedUndoReportsWhatWasUndone() async throws {
+        let copy = try makeFile("copy.txt")
+        var record = OperationRecord()
+        // Undone newest first: the move fails (its file is gone), after the copy was already trashed.
+        record.steps = [.moved(from: url("missing-from.txt"), to: url("missing-to.txt")), .created(at: copy)]
+
+        do {
+            try await operations.undo(record)
+            XCTFail("Expected an error")
+        } catch let error as PartialUndoError {
+            XCTAssertEqual(error.inverse.steps.count, 1, "The trashed copy must be redoable")
+            XCTAssertFalse(exists("copy.txt"))
+            try await operations.undo(error.inverse)  // redo the part that was undone
+            XCTAssertTrue(exists("copy.txt"))
+        }
     }
 
     func testNamingWithoutExtension() throws {

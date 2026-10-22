@@ -17,6 +17,15 @@ final class ClipboardController: ObservableObject {
 
     init() {
         refreshFromPasteboard()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(pasteboardChangedByApp), name: .pasteboardChangedByApp, object: nil
+        )
+    }
+
+    /// Parts of the app that write to the pasteboard directly (e.g. Copy Image in the preview) post
+    /// `.pasteboardChangedByApp` so the clipboard bar updates right away.
+    @objc private func pasteboardChangedByApp() {
+        refreshFromPasteboard()
     }
 
     /// Paths of items that will be moved on the next paste.
@@ -62,10 +71,26 @@ final class ClipboardController: ObservableObject {
         clear()
     }
 
+    /// After pasting a cut: forget the items that moved, keep any that didn't (failed or skipped).
+    func didMove(_ sources: [URL]) {
+        guard let contents, contents.mode == .cut else { return }
+        let moved = Set(sources.map(\.standardizedFileURL.path))
+        let remaining = contents.urls.filter { !moved.contains($0.standardizedFileURL.path) }
+        if remaining.isEmpty {
+            clear()
+        } else {
+            set(remaining, mode: .cut)
+        }
+    }
+
     /// Cut items are gone from their old location after a paste, so the clipboard is emptied.
     func didPaste() {
         if contents?.mode == .cut {
             clear()
         }
     }
+}
+
+extension Notification.Name {
+    static let pasteboardChangedByApp = Notification.Name("FileManagerPasteboardChangedByApp")
 }
