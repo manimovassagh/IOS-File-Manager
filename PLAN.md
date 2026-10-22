@@ -108,7 +108,7 @@ Principles:
 - [x] App icon, themes (appearance, accent colors, row sizes) in Settings
 - [x] Editor color themes (Dracula, Nord, Tokyo Night, Catppuccin, One Dark, Gruvbox, Rosé Pine, Solarized, GitHub)
 - [x] Editable sidebar favorites (drag folders in, drop files onto them)
-- [ ] Move To… / Copy To… with recent destinations
+- [x] Move To… / Copy To… with recent destinations
 - [ ] Tabs (⌘T)
 - [ ] Icon / gallery grid view with a size slider
 - [ ] Dual pane with copy/move to the other pane

@@ -9,10 +9,11 @@ struct BrowserView: View {
     @StateObject private var model: BrowserModel
     @Environment(\.undoManager) private var undoManager
 
-    init(clipboard: ClipboardController, settings: ThemeSettings, favorites: FavoritesStore = .shared) {
+    @MainActor
+    init(clipboard: ClipboardController, settings: ThemeSettings, favorites: FavoritesStore? = nil) {
         self.clipboard = clipboard
         self.settings = settings
-        self.favorites = favorites
+        self.favorites = favorites ?? .shared
         _model = StateObject(wrappedValue: BrowserModel(clipboard: clipboard))
     }
 
@@ -76,6 +77,14 @@ struct BrowserView: View {
         .focusedSceneObject(model)
         .toolbar { toolbar }
         .tint(settings.accentColor)
+        .sheet(item: $model.destinationRequest) { request in
+            DestinationPicker(
+                request: request,
+                accent: settings.accentColor,
+                onChoose: { model.send(request, to: $0, undoManager: undoManager) },
+                onCancel: { model.destinationRequest = nil }
+            )
+        }
         .alert("Something went wrong", isPresented: errorBinding) {
             Button("OK", role: .cancel) {}
         } message: {

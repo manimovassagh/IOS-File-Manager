@@ -536,6 +536,8 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         paste.isEnabled = canPaste
         menu.addItem(paste)
         menu.addItem(item("Duplicate", #selector(menuDuplicate), key: "d"))
+        menu.addItem(item("Move To…", #selector(menuMoveTo), key: "m", modifiers: [.command, .shift]))
+        menu.addItem(item("Copy To…", #selector(menuCopyTo), key: "c", modifiers: [.command, .option]))
         if selected.count == 1, ThumbnailCache.isImage(selected[0].url) {
             menu.addItem(item("Copy Image", #selector(menuCopyImage)))
         }
@@ -623,6 +625,8 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         guard let item = selectedItems.first else { return }
         model.showInEnclosingFolder(item)
     }
+    @objc private func menuMoveTo() { model.requestDestination(mode: .cut) }
+    @objc private func menuCopyTo() { model.requestDestination(mode: .copy) }
     @objc private func menuAddToSidebar() {
         FavoritesStore.shared.add(selectedItems.filter(\.isBrowsable).map(\.browseURL))
     }

@@ -33,6 +33,20 @@ struct FileCommands: Commands {
             .keyboardShortcut("d", modifiers: .command)
             .disabled(!hasSelection)
 
+            Button("Move To…") {
+                guard isFileListActive else { return }
+                model?.requestDestination(mode: .cut)
+            }
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+            .disabled(!hasSelection)
+
+            Button("Copy To…") {
+                guard isFileListActive else { return }
+                model?.requestDestination(mode: .copy)
+            }
+            .keyboardShortcut("c", modifiers: [.command, .option])
+            .disabled(!hasSelection)
+
             Button("Rename") {
                 guard isFileListActive else { return }
                 model?.renameSelection()

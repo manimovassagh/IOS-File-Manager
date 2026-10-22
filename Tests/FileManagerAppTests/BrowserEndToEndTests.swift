@@ -445,6 +445,67 @@ final class BrowserEndToEndTests: XCTestCase {
         XCTAssertTrue(wait(pump) { model.selection.map(\.lastPathComponent) == ["Documents"] })
     }
 
+    // MARK: - Move To… / Copy To… (#14)
+
+    @MainActor
+    func testMoveToPickerFindsFoldersAndMovesWithUndoAndNotice() throws {
+        defer { UserDefaults.standard.removeObject(forKey: "destinationHistory") }
+        UserDefaults.standard.removeObject(forKey: "destinationHistory")
+        let archive = root.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+
+        let model = BrowserModel(clipboard: ClipboardController(), start: .folder(root))
+        XCTAssertTrue(wait { model.items.count == 5 })
+        let notes = try XCTUnwrap(model.items.first { $0.name == "notes.txt" })
+        model.selection = [notes.url]
+        model.requestDestination(mode: .cut)
+        let request = try XCTUnwrap(model.destinationRequest)
+        XCTAssertEqual(request.title, "Move “notes.txt” to…")
+
+        // Typing a fragment finds folders inside the current folder; the folder the file is
+        // already in isn't offered for a move.
+        let picker = DestinationPickerModel(request: request, history: DestinationHistory(), favorites: [])
+        picker.query = "arc"
+        XCTAssertEqual(picker.results.first?.name, "Archive")
+        picker.query = "doc"
+        XCTAssertEqual(picker.results.first?.name, "Documents")
+        picker.query = ""
+        XCTAssertFalse(picker.results.contains { $0.url.standardizedFileURL.path == self.root.standardizedFileURL.path })
+        // Typing a path lists the folders in it.
+        picker.query = root.path + "/"
+        XCTAssertEqual(Set(picker.results.map(\.name)), ["Archive", "Documents"])
+        picker.query = root.path + "/Arch"
+        XCTAssertEqual(picker.results.map(\.name), ["Archive"])
+
+        // The picker window, for the screenshot.
+        let view = DestinationPicker(request: request, history: DestinationHistory(), favorites: [root, archive],
+                                     accent: .accentColor, onChoose: { _ in }, onCancel: {})
+        show(NSHostingView(rootView: view))
+        wait(timeout: 1) { false }
+        snapshot("move-to-1-picker")
+
+        let undoManager = UndoManager()
+        model.send(request, to: archive, undoManager: undoManager)
+        XCTAssertNil(model.destinationRequest)
+        let moved = archive.appendingPathComponent("notes.txt")
+        XCTAssertTrue(wait { FileManager.default.fileExists(atPath: moved.path) && model.clipboard.notice != nil })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: notes.url.path))
+        XCTAssertEqual(model.clipboard.notice, "Moved 1 item to Archive")
+        XCTAssertEqual(DestinationHistoryStore.shared.history.ranked().first, archive.standardizedFileURL.path)
+
+        // Recently used destinations come first next time.
+        let next = DestinationPickerModel(
+            request: DestinationRequest(urls: [root.appendingPathComponent("photo.png")], mode: .copy, currentFolder: root),
+            history: DestinationHistoryStore.shared.history, favorites: []
+        )
+        XCTAssertEqual(next.results.first?.name, "Archive")
+        XCTAssertEqual(next.results.first?.isRecent, true)
+
+        XCTAssertTrue(wait { undoManager.canUndo })
+        undoManager.undo()
+        XCTAssertTrue(wait { FileManager.default.fileExists(atPath: notes.url.path) }, "Undo should move the file back")
+    }
+
     // MARK: - Sidebar favorites (#22)
 
     /// A FavoritesStore saved in its own defaults domain, removed after the test.

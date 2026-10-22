@@ -30,6 +30,8 @@ final class BrowserModel: ObservableObject {
     /// Bumped whenever `allItems` is replaced, so views can tell cheaply whether to redisplay.
     private(set) var itemsVersion = 0
     @Published var selection: Set<URL> = []
+    /// Set while the Move To… / Copy To… picker is open.
+    @Published var destinationRequest: DestinationRequest?
     @Published var sort: FileSort {
         didSet {
             guard sort != oldValue else { return }
@@ -407,6 +409,30 @@ final class BrowserModel: ObservableObject {
             }
         }
         return groups
+    }
+
+    /// Opens the Move To… / Copy To… picker for the selection.
+    func requestDestination(mode: FileClipboard.Mode) {
+        let urls = selectedItems.map(\.url)
+        guard !urls.isEmpty else { return }
+        destinationRequest = DestinationRequest(urls: urls, mode: mode, currentFolder: currentURL)
+    }
+
+    /// Moves or copies the request's items into `folder` (undoable), remembers the folder for the
+    /// picker and says where they went.
+    func send(_ request: DestinationRequest, to folder: URL, undoManager: UndoManager?) {
+        destinationRequest = nil
+        DestinationHistoryStore.shared.record(folder)
+        let name = FileManager.default.displayName(atPath: folder.path)
+        transfer(
+            request.urls, into: folder, mode: request.mode, actionName: request.verb, undoManager: undoManager,
+            onFinished: { [clipboard] result in
+                let count = result.resultURLs.count
+                guard count > 0 else { return }
+                if request.mode == .cut { clipboard.didMove(result.movedSources) }
+                clipboard.notice = "\(request.mode == .cut ? "Moved" : "Copied") \(count) \(count == 1 ? "item" : "items") to \(name)"
+            }
+        )
     }
 
     /// Handles files dropped onto a list or onto a folder in it.
