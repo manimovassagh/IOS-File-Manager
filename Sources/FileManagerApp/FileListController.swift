@@ -450,8 +450,22 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         ) as? [URL] ?? []
     }
 
-    /// Like Finder: move within the same disk, copy to another disk. Hold ⌥ to force a copy, ⌘ to force a move.
     private static func dropMode(for info: NSDraggingInfo, sources: [URL], destination: URL) -> FileClipboard.Mode? {
+        dropMode(mask: info.draggingSourceOperationMask, sources: sources, destination: destination)
+    }
+
+    /// The operation mask for a SwiftUI drop (which doesn't report one): from the keys held now.
+    nonisolated static func currentDropMask() -> NSDragOperation {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.option) { return .copy }
+        if flags.contains(.command) { return .move }
+        return [.copy, .move, .generic]
+    }
+
+    /// Like Finder: move within the same disk, copy to another disk. Hold ⌥ to force a copy, ⌘ to force a move.
+    /// `nil` when the drop isn't possible (a folder into itself, or moving items where they already are).
+    nonisolated static func dropMode(mask: NSDragOperation, sources: [URL], destination: URL) -> FileClipboard.Mode? {
+        guard !sources.isEmpty else { return nil }
         let destinationPath = destination.standardizedFileURL.pathComponents
         for source in sources {
             let sourcePath = source.standardizedFileURL.pathComponents
@@ -459,7 +473,6 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             if destinationPath.starts(with: sourcePath) { return nil }
         }
 
-        let mask = info.draggingSourceOperationMask
         let mode: FileClipboard.Mode
         if mask == .copy {
             mode = .copy
@@ -541,6 +554,10 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         if selected.count == 1, selected[0].isBrowsable {
             menu.addItem(item("Open in Terminal", #selector(menuTerminal)))
         }
+        let folders = selected.filter(\.isBrowsable)
+        if !folders.isEmpty, !folders.allSatisfy({ FavoritesStore.shared.contains($0.browseURL) }) {
+            menu.addItem(item("Add to Sidebar", #selector(menuAddToSidebar), key: "s", modifiers: [.command, .control]))
+        }
     }
 
     /// Apps that can open every selected file, default app first.
@@ -605,6 +622,9 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     @objc private func menuEnclosingFolder() {
         guard let item = selectedItems.first else { return }
         model.showInEnclosingFolder(item)
+    }
+    @objc private func menuAddToSidebar() {
+        FavoritesStore.shared.add(selectedItems.filter(\.isBrowsable).map(\.browseURL))
     }
     @objc private func menuTerminal() {
         let target = selectedItems.first.flatMap { $0.isBrowsable ? $0.browseURL : nil }

@@ -445,6 +445,119 @@ final class BrowserEndToEndTests: XCTestCase {
         XCTAssertTrue(wait(pump) { model.selection.map(\.lastPathComponent) == ["Documents"] })
     }
 
+    // MARK: - Sidebar favorites (#22)
+
+    /// A FavoritesStore saved in its own defaults domain, removed after the test.
+    @MainActor
+    private func makeFavorites() -> (FavoritesStore, UserDefaults) {
+        let suite = "FavoritesTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        return (FavoritesStore(defaults: defaults), defaults)
+    }
+
+    @MainActor
+    func testFavoritesCanBeAddedReorderedRemovedAndAreSaved() throws {
+        let (favorites, defaults) = makeFavorites()
+        XCTAssertEqual(favorites.ids, FavoritesStore.defaultIDs)
+        let projects = root.appendingPathComponent("Projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+
+        favorites.add([projects, root.appendingPathComponent("notes.txt")], at: 1)
+        XCTAssertEqual(favorites.ids[1], projects.standardizedFileURL.path, "Folders are added where they're dropped")
+        XCTAssertFalse(favorites.ids.contains { $0.hasSuffix("notes.txt") }, "Files can't be favorites")
+        favorites.add([projects])
+        XCTAssertEqual(favorites.ids.filter { $0 == projects.standardizedFileURL.path }.count, 1, "No duplicates")
+
+        // Drag Projects to the top.
+        favorites.move(fromOffsets: [1], toOffset: 0)
+        XCTAssertEqual(favorites.items.first?.name, "Projects")
+        XCTAssertEqual(favorites.items.first?.systemImage, "folder")
+        XCTAssertEqual(FavoritesStore(defaults: defaults).ids, favorites.ids, "The order is saved")
+
+        favorites.remove(id: "recents")
+        XCTAssertFalse(FavoritesStore(defaults: defaults).ids.contains("recents"))
+
+        // A favorite whose folder is gone is hidden, and comes back with the folder.
+        try FileManager.default.removeItem(at: projects)
+        XCTAssertFalse(favorites.items.contains { $0.name == "Projects" })
+        XCTAssertTrue(favorites.ids.contains(projects.standardizedFileURL.path))
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        XCTAssertTrue(favorites.items.contains { $0.name == "Projects" })
+
+        favorites.resetToDefaults()
+        XCTAssertEqual(FavoritesStore(defaults: defaults).ids, FavoritesStore.defaultIDs)
+    }
+
+    @MainActor
+    func testAddToSidebarUsesSelectedFoldersOrTheCurrentFolder() throws {
+        let model = BrowserModel(clipboard: ClipboardController(), start: .folder(root))
+        XCTAssertTrue(wait { model.items.count == 4 })
+        XCTAssertEqual(model.foldersForSidebar.map(\.path), [root.path])
+        let documents = try XCTUnwrap(model.items.first { $0.name == "Documents" })
+        let notes = try XCTUnwrap(model.items.first { $0.name == "notes.txt" })
+        model.selection = [documents.url, notes.url]
+        XCTAssertEqual(model.foldersForSidebar.map(\.lastPathComponent), ["Documents"])
+        model.navigate(to: .recents)
+        model.selection = []
+        XCTAssertTrue(model.foldersForSidebar.isEmpty)
+    }
+
+    /// The window's sidebar lists a newly added favorite, and files dropped on it move there.
+    @MainActor
+    func testSidebarShowsNewFavoriteAndAcceptsDroppedFiles() throws {
+        let (favorites, _) = makeFavorites()
+        let projects = root.appendingPathComponent("Projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        UserDefaults.standard.set(root.path, forKey: "lastLocation")
+        UserDefaults.standard.set(ViewMode.list.rawValue, forKey: "viewMode")
+        defer {
+            UserDefaults.standard.removeObject(forKey: "lastLocation")
+            UserDefaults.standard.removeObject(forKey: "viewMode")
+        }
+
+        show(NSHostingView(rootView: BrowserView(clipboard: ClipboardController(), settings: .shared, favorites: favorites)))
+        wait(timeout: 2) { false }
+        let sidebar = try XCTUnwrap(sidebarTable(), "No sidebar list found")
+        let rowsBefore = sidebar.numberOfRows
+        XCTAssertGreaterThan(rowsBefore, favorites.items.count, "The sidebar should list every favorite")
+
+        favorites.add([projects], at: 0)
+        XCTAssertTrue(wait { sidebar.numberOfRows == rowsBefore + 1 }, "The new favorite didn't appear")
+        snapshot("sidebar-1-new-favorite")
+
+        // Dropping files onto the favorite moves them into its folder.
+        let model = BrowserModel(clipboard: ClipboardController(), start: .folder(root))
+        let sidebarView = SidebarView(
+            location: model.location, palette: nil, accent: .accentColor, favorites: favorites,
+            onSelect: { _ in },
+            onDrop: { urls, folder, mode in model.drop(urls, into: folder, mode: mode, undoManager: nil) }
+        )
+        let item = try XCTUnwrap(favorites.items.first)
+        let notes = root.appendingPathComponent("notes.txt")
+        XCTAssertFalse(sidebarView.drop([projects], onto: item, mask: .move), "A folder can't go into itself")
+        XCTAssertTrue(sidebarView.drop([notes], onto: item, mask: [.copy, .move, .generic]))
+        XCTAssertTrue(wait {
+            FileManager.default.fileExists(atPath: projects.appendingPathComponent("notes.txt").path)
+                && !FileManager.default.fileExists(atPath: notes.path)
+        }, "The dropped file wasn't moved into the favorite folder")
+        let recents = try XCTUnwrap(SidebarItem.favorite(id: "recents"))
+        XCTAssertFalse(sidebarView.drop([root.appendingPathComponent("photo.png")], onto: recents, mask: .copy),
+                       "Recents isn't a folder; nothing can be dropped there")
+    }
+
+    /// The SwiftUI sidebar list (the one table that isn't a file list).
+    @MainActor
+    private func sidebarTable() -> NSTableView? {
+        var tables: [NSTableView] = []
+        func collect(_ view: NSView) {
+            if let table = view as? NSTableView, !(table is FileTable) { tables.append(table) }
+            view.subviews.forEach(collect)
+        }
+        if let content = window?.contentView { collect(content) }
+        return tables.first
+    }
+
     // MARK: - Helpers
 
     /// The preview is the last pane and fills the space after the columns.

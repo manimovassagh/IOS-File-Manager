@@ -5,20 +5,27 @@ import SwiftUI
 struct BrowserView: View {
     @ObservedObject var clipboard: ClipboardController
     @ObservedObject var settings: ThemeSettings
+    @ObservedObject var favorites: FavoritesStore
     @StateObject private var model: BrowserModel
     @Environment(\.undoManager) private var undoManager
 
-    init(clipboard: ClipboardController, settings: ThemeSettings) {
+    init(clipboard: ClipboardController, settings: ThemeSettings, favorites: FavoritesStore = .shared) {
         self.clipboard = clipboard
         self.settings = settings
+        self.favorites = favorites
         _model = StateObject(wrappedValue: BrowserModel(clipboard: clipboard))
     }
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(location: model.location, palette: settings.palette, accent: settings.accentColor) {
-                model.navigate(to: $0)
-            }
+            SidebarView(
+                location: model.location,
+                palette: settings.palette,
+                accent: settings.accentColor,
+                favorites: favorites,
+                onSelect: { model.navigate(to: $0) },
+                onDrop: { urls, folder, mode in model.drop(urls, into: folder, mode: mode, undoManager: undoManager) }
+            )
         } detail: {
             VStack(spacing: 0) {
                 content

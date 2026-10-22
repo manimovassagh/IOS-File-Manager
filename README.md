@@ -8,6 +8,8 @@ See [PLAN.md](PLAN.md) for the roadmap.
   iCloud Drive and mounted volumes
   - *Screenshots* shows only your screenshots and screen recordings, from wherever macOS saves them
   - *Recents* shows files you opened in the last 30 days (via Spotlight)
+  - Favorites are yours to edit: drag a folder into the sidebar (or *Add to Sidebar*, `⌃⌘S`), drag
+    rows to reorder, right-click to remove; drop files onto a sidebar folder to move them there
 - Two views: a fast **list** (Name, Date Modified, Size, Kind; sortable) and Finder-style **columns**
   with a preview of the selected file — switch with `⌘1` / `⌘3`
 - **Preview** panel next to the list (`⌥⌘I`) and **Quick Look** with `Space`
@@ -55,6 +57,7 @@ See [PLAN.md](PLAN.md) for the roadmap.
 | Delete Immediately | `⌥⌘⌫` |
 | Undo / Redo | `⌘Z` / `⇧⌘Z` |
 | Open in Terminal | `⌃⌘T` |
+| Add folder to sidebar | `⌃⌘S` |
 | Show hidden files | `⇧⌘.` |
 
 ## Requirements

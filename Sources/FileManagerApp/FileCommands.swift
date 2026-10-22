@@ -63,6 +63,13 @@ struct FileCommands: Commands {
             }
             .keyboardShortcut("t", modifiers: [.command, .control])
             .disabled(model == nil)
+
+            Button("Add to Sidebar") {
+                guard isFileListActive, let model else { return }
+                FavoritesStore.shared.add(model.foldersForSidebar)
+            }
+            .keyboardShortcut("s", modifiers: [.command, .control])
+            .disabled(model?.foldersForSidebar.isEmpty ?? true)
         }
 
         CommandGroup(before: .toolbar) {
