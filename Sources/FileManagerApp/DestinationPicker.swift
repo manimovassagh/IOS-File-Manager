@@ -169,6 +169,7 @@ struct DestinationPicker: View {
     let onChoose: (URL) -> Void
     let onCancel: () -> Void
 
+    @MainActor
     init(
         request: DestinationRequest,
         history: DestinationHistory = DestinationHistoryStore.shared.history,

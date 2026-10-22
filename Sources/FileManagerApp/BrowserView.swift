@@ -9,6 +9,7 @@ struct BrowserView: View {
     @StateObject private var model: BrowserModel
     @Environment(\.undoManager) private var undoManager
 
+    @MainActor
     init(clipboard: ClipboardController, settings: ThemeSettings, favorites: FavoritesStore = .shared) {
         self.clipboard = clipboard
         self.settings = settings
